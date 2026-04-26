@@ -1,0 +1,123 @@
+-- Khởi tạo dịch vụ
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local isAntiStunEnabled = false
+
+-- ==========================================
+-- TẠO MENU HÌNH TRÒN GỌN NHẸ
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AntiStunSimple"
+ScreenGui.ResetOnSpawn = false
+
+-- Đưa vào CoreGui để không bị mất khi chết
+local success, err = pcall(function()
+    ScreenGui.Parent = CoreGui
+end)
+if not success then
+    ScreenGui.Parent = player:WaitForChild("PlayerGui")
+end
+
+-- Nút chính (Vừa là Menu vừa là Toggle)
+local MainBtn = Instance.new("TextButton")
+MainBtn.Name = "AntiStunButton"
+MainBtn.Size = UDim2.new(0.15, 0, 0.15, 0) -- Độ to tầm 15% để cân đối, ông có thể chỉnh lại
+MainBtn.Position = UDim2.new(0.8, 0, 0.8, 0) -- Vị trí góc dưới bên phải
+MainBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50) -- Màu đỏ mặc định (OFF)
+MainBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MainBtn.TextScaled = true
+MainBtn.Font = Enum.Font.SourceSansBold
+MainBtn.Text = "ANTI-STUN\nOFF"
+MainBtn.Parent = ScreenGui
+
+-- Bo tròn nút thành hình tròn hoàn hảo
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(1, 0)
+UICorner.Parent = MainBtn
+
+-- Đảm bảo nút luôn tròn (tỉ lệ 1:1)
+local UIAspect = Instance.new("UIAspectRatioConstraint")
+UIAspect.AspectRatio = 1
+UIAspect.Parent = MainBtn
+
+-- Viền cho đẹp
+local UIStroke = Instance.new("UIStroke")
+UIStroke.Thickness = 3
+UIStroke.Color = Color3.fromRGB(0, 0, 0)
+UIStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+UIStroke.Parent = MainBtn
+
+-- ==========================================
+-- LOGIC KÉO THẢ (DRAG)
+-- ==========================================
+local dragging, dragInput, dragStart, startPos
+
+MainBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainBtn.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+MainBtn.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        MainBtn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- ==========================================
+-- LOGIC ANTI STUN
+-- ==========================================
+local function loopAntiStun()
+    if not isAntiStunEnabled then return end
+    
+    local character = player.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        
+        if humanoid then
+            -- Duy trì trạng thái không bị choáng
+            if humanoid.WalkSpeed < 16 then humanoid.WalkSpeed = 16 end
+            if humanoid.JumpPower < 50 then humanoid.JumpPower = 50 end
+            if humanoid.PlatformStand then humanoid.PlatformStand = false end
+        end
+        
+        if rootPart and rootPart.Anchored then rootPart.Anchored = false end
+    end
+end
+
+RunService.Heartbeat:Connect(loopAntiStun)
+
+-- ==========================================
+-- BẬT/TẮT KHI CLICK
+-- ==========================================
+MainBtn.MouseButton1Click:Connect(function()
+    isAntiStunEnabled = not isAntiStunEnabled
+    
+    if isAntiStunEnabled then
+        MainBtn.Text = "ANTI-STUN\nON"
+        MainBtn.BackgroundColor3 = Color3.fromRGB(50, 255, 50) -- Xanh lá khi bật
+    else
+        MainBtn.Text = "ANTI-STUN\nOFF"
+        MainBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50) -- Đỏ khi tắt
+    end
+end)
