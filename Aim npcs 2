@@ -1,0 +1,206 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- [[ TẠO GIAO DIỆN (NỀN ĐEN - TRẮNG) ]] --
+local gui = Instance.new("ScreenGui")
+gui.Name = "CleanAimNPC"
+gui.Parent = CoreGui
+
+local menuButton = Instance.new("Frame")
+menuButton.Size = UDim2.new(0.12, 0, 0.12, 0) -- Độ to 8%
+menuButton.Position = UDim2.new(0.5, 0, 0.8, 0)
+menuButton.AnchorPoint = Vector2.new(0.5, 0.5)
+menuButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0) -- Mặc định màu Đen
+menuButton.Active = true
+menuButton.Parent = gui
+
+local aspect = Instance.new("UIAspectRatioConstraint")
+aspect.AspectRatio = 1
+aspect.Parent = menuButton
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(1, 0)
+corner.Parent = menuButton
+
+-- Viền mỏng cho dễ nhìn
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(85, 0, 255) 
+stroke.Thickness = 2.5
+stroke.Parent = menuButton
+
+-- [[ LOGIC CAMLOCK NPCs (TỐI ƯU HÓA KHÔNG LAG) ]] --
+local targetMode = "OFF" 
+local targetNPC = nil
+local touchStartTime = 0
+local isPressing = false
+
+-- Bộ đệm chứa NPC (cập nhật 0.5s một lần để chống lag cho Auto Aim)
+local cachedNPCs = {}
+task.spawn(function()
+    while task.wait(0.5) do
+        local tempNPCs = {}
+        for _, obj in pairs(Workspace:GetDescendants()) do
+            if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+                -- Nếu không phải là người chơi và còn sống thì thêm vào danh sách
+                if not Players:GetPlayerFromCharacter(obj) and obj.Humanoid.Health > 0 then
+                    table.insert(tempNPCs, obj)
+                end
+            end
+        end
+        cachedNPCs = tempNPCs
+    end
+end)
+
+-- Tìm con gần tâm màn hình (Dùng cho nhấp thả)
+local function getClosestToCenter()
+    local center = Camera.ViewportSize / 2
+    local closestDist = math.huge
+    local closestNPC = nil
+    for _, npc in ipairs(cachedNPCs) do
+        if npc and npc:FindFirstChild("HumanoidRootPart") and npc.Humanoid.Health > 0 then
+            local hrp = npc.HumanoidRootPart
+            local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+            if onScreen then
+                local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                if dist < closestDist then
+                    closestDist = dist
+                    closestNPC = npc
+                end
+            end
+        end
+    end
+    return closestNPC
+end
+
+-- Tìm con gần nhân vật mình nhất (Dùng cho Auto)
+local function getClosestToPlayer()
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil end
+    local playerPos = LocalPlayer.Character.HumanoidRootPart.Position
+    local closestDist = math.huge
+    local closestNPC = nil
+    for _, npc in ipairs(cachedNPCs) do
+        if npc and npc:FindFirstChild("HumanoidRootPart") and npc.Humanoid.Health > 0 then
+            local hrp = npc.HumanoidRootPart
+            local dist = (playerPos - hrp.Position).Magnitude
+            if dist < closestDist then
+                closestDist = dist
+                closestNPC = npc
+            end
+        end
+    end
+    return closestNPC
+end
+
+-- Xử lý thao tác nhấn/giữ
+menuButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isPressing = true
+        touchStartTime = tick()
+    end
+end)
+
+menuButton.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if not isPressing then return end
+        isPressing = false
+        
+        local holdDuration = tick() - touchStartTime
+
+        if holdDuration >= 0.3 then
+            -- NHẤN GIỮ: Bật/Tắt chế độ AUTO
+            if targetMode == "AUTO" then
+                -- Nếu đang AUTO mà nhấn giữ -> Tắt, màu đen
+                targetMode = "OFF"
+                menuButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+            else
+                -- Nếu đang OFF mà nhấn giữ -> Bật AUTO, màu trắng
+                targetMode = "AUTO"
+                menuButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            end
+        else
+            -- NHẤN THẢ NHANH: Bật/Tắt chế độ nhắm bằng tâm màn hình (Center)
+            if targetMode ~= "OFF" then
+                targetMode = "OFF"
+                menuButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+            else
+                targetNPC = getClosestToCenter()
+                if targetNPC then
+                    targetMode = "CENTER"
+                    menuButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0) -- Giữ nền đen nhưng viền sẽ đổi màu để biết
+                end
+            end
+        end
+    end
+end)
+
+-- Vòng lặp khóa camera mượt mà
+RunService.RenderStepped:Connect(function()
+    if targetMode == "AUTO" then
+        -- Liên tục tìm con gần nhất để bẻ camera sang con đó (Không bị kẹt 1 con nữa)
+        local dynamicTarget = getClosestToPlayer()
+        if dynamicTarget and dynamicTarget:FindFirstChild("HumanoidRootPart") then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, dynamicTarget.HumanoidRootPart.Position)
+        end
+    elseif targetMode == "CENTER" then
+        -- Khóa chết vào con đã nhắm bằng tâm
+        if targetNPC and targetNPC:FindFirstChild("HumanoidRootPart") and targetNPC.Humanoid.Health > 0 then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetNPC.HumanoidRootPart.Position)
+        else
+            targetMode = "OFF"
+            targetNPC = nil
+            menuButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        end
+    end
+end)
+
+-- [[ KÉO THẢ MENU KHÔNG BỊ CHẠM NHẦM ]] --
+local dragging, dragInput, dragStart, startPos
+
+menuButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = menuButton.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+menuButton.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        menuButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        isPressing = false -- Đang vuốt thì hủy lệnh click/giữ
+    end
+end)
+
+-- Hiệu ứng chớp viền nhẹ cho đẹp
+task.spawn(function()
+    local hue = 0
+    while task.wait() do
+        if targetMode == "OFF" then 
+            hue = hue + 0.005
+            if hue >= 1 then hue = 0 end
+            stroke.Color = Color3.fromHSV(hue, 0.8, 1)
+        elseif targetMode == "AUTO" then
+            stroke.Color = Color3.fromRGB(200, 200, 200) -- Viền bạc khi bật auto trắng
+        elseif targetMode == "CENTER" then
+            stroke.Color = Color3.fromRGB(255, 0, 100) -- Viền hồng đỏ khi nhắm tâm
+        end
+    end
+end)
