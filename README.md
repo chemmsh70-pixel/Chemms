@@ -1,0 +1,572 @@
+-- Load Orion Library
+local OrionLib = loadstring(game:HttpGet('https://raw.githubusercontent.com/VerbalHubz/Verbal-Hub/refs/heads/main/Orion%20Hub%20Ui%20V3'))()
+
+local Window = OrionLib:MakeWindow({Name = "Speed egors", HidePremium = false, SaveConfig = true, ConfigFolder = "FastAnimFE"})
+
+-- // Fast Animation
+local enabled = false
+local stopLoop = false
+local animationSpeed = 15
+
+local function fastAnimationLoop()
+    task.spawn(function()
+        while not stopLoop do
+            task.wait()
+            local player = game:GetService("Players").LocalPlayer
+            local char = player.Character or player.CharacterAdded:Wait()
+            local humanoid = char:FindFirstChildOfClass("Humanoid") or char:FindFirstChildOfClass("AnimationController")
+            if not humanoid then continue end
+
+            for _, track in next, humanoid:GetPlayingAnimationTracks() do  
+                track:AdjustSpeed(animationSpeed)  
+            end  
+        end  
+    end)
+end
+
+local TabAnim = Window:MakeTab({
+    Name = "Animation",
+    Icon = "rbxassetid://7733960981",
+    PremiumOnly = false
+})
+
+TabAnim:AddToggle({
+    Name = "Enable Fast Animation",
+    Default = false,
+    Callback = function(Value)
+        enabled = Value
+        if enabled then
+            stopLoop = false
+            fastAnimationLoop()
+        else
+            stopLoop = true
+        end
+    end
+})
+
+TabAnim:AddSlider({
+    Name = "Animation Speed",
+    Min = 1,
+    Max = 50,
+    Default = 15,
+    Color = Color3.fromRGB(255, 255, 255),
+    Increment = 1,
+    ValueName = "speed",
+    Callback = function(Value)
+        animationSpeed = Value
+        if enabled then
+            local player = game:GetService("Players").LocalPlayer
+            local char = player.Character
+            if char then
+                local humanoid = char:FindFirstChildOfClass("Humanoid") or char:FindFirstChildOfClass("AnimationController")
+                if humanoid then
+                    for _, track in next, humanoid:GetPlayingAnimationTracks() do  
+                        track:AdjustSpeed(animationSpeed)  
+                    end
+                end
+            end
+        end
+    end
+})
+
+-- // Camera Freeze Logic
+local RunService = game:GetService("RunService")
+local frozenCFrame = nil
+local freezeConnection = nil
+
+local function freezeCamera()
+    local camera = workspace.CurrentCamera
+    frozenCFrame = camera.CFrame
+    camera.CameraType = Enum.CameraType.Scriptable
+    camera.CFrame = frozenCFrame
+    
+    if freezeConnection then freezeConnection:Disconnect() end
+    freezeConnection = RunService.RenderStepped:Connect(function()
+        if camera.CameraType == Enum.CameraType.Scriptable and frozenCFrame then
+            camera.CFrame = frozenCFrame
+        end
+    end)
+end
+
+local function unfreezeCamera()
+    local camera = workspace.CurrentCamera
+    camera.CameraType = Enum.CameraType.Custom
+    frozenCFrame = nil
+    if freezeConnection then
+        freezeConnection:Disconnect()
+        freezeConnection = nil
+    end
+end
+
+-- // Global Combat Variables
+_G.CombatMode = false
+_G.AimTarget = nil
+local crosshairGui = nil
+local Players = game:GetService("Players")
+local localPlayer = Players.LocalPlayer
+
+-- Create/Toggle Crosshair Function
+local function toggleCrosshair(state)
+    if state then
+        if not crosshairGui then
+            crosshairGui = Instance.new("ScreenGui")
+            crosshairGui.Name = "CombatCrosshairUI"
+            crosshairGui.ResetOnSpawn = false
+            crosshairGui.Parent = localPlayer:WaitForChild("PlayerGui")
+            
+            -- Tâm ngắm màu đỏ giữa màn hình
+            local dot = Instance.new("Frame")
+            dot.Size = UDim2.new(0, 8, 0, 8)
+            dot.Position = UDim2.new(0.5, -4, 0.5, -4)
+            dot.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+            dot.BorderSizePixel = 0
+            
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(1, 0)
+            corner.Parent = dot
+            dot.Parent = crosshairGui
+        end
+        crosshairGui.Enabled = true
+    else
+        if crosshairGui then crosshairGui.Enabled = false end
+        _G.AimTarget = nil
+    end
+end
+
+-- Combat Auto-Aim Loop
+RunService.RenderStepped:Connect(function()
+    if _G.CombatMode then
+        local char = localPlayer.Character
+        if char then
+            -- 1. Auto Attack
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then tool:Activate() end
+            
+            -- 2. Raycast từ giữa màn hình (Tâm ngắm) để tìm đối thủ
+            local camera = workspace.CurrentCamera
+            local viewportCenter = camera.ViewportSize / 2
+            local ray = camera:ViewportPointToRay(viewportCenter.X, viewportCenter.Y)
+            
+            local params = RaycastParams.new()
+            params.FilterDescendantsInstances = {char}
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            
+            local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+            if result and result.Instance then
+                local model = result.Instance:FindFirstAncestorOfClass("Model")
+                if model and model:FindFirstChild("Humanoid") and model:FindFirstChild("Humanoid").Health > 0 then
+                    local targetPlayer = Players:GetPlayerFromCharacter(model)
+                    if targetPlayer and targetPlayer ~= localPlayer then
+                        -- Khóa mục tiêu
+                        _G.AimTarget = model:FindFirstChild("HumanoidRootPart")
+                    end
+                end
+            else
+                _G.AimTarget = nil
+            end
+        end
+    end
+end)
+
+-- // TheFake Tab
+local TabFake = Window:MakeTab({
+    Name = "TheFake",
+    Icon = "rbxassetid://7733960981",
+    PremiumOnly = false
+})
+
+-- Combat Toggle in Main Menu
+TabFake:AddToggle({
+    Name = "🔥 COMBAT MODE (Auto Attack & Aim Lock)",
+    Default = false,
+    Callback = function(Value)
+        _G.CombatMode = Value
+        toggleCrosshair(Value)
+    end
+})
+
+-- Speed variables
+local mirage1Speed = 0.03
+local mirage2Speed = 0.03
+local mirage3Speed = 0.03
+local mirage3MinSpeed = 0.5
+local mirage3MaxSpeed = 0.03
+local mirage3Acceleration = 0.05
+
+-- Mire 4 Variables
+local mirage4Speed = 0.01
+local mirage4CloneCount = 2
+
+-- === MIRAGE 1 ===
+TabFake:AddSlider({
+    Name = "Speed Mirage 1 Delay",
+    Min = 0.01,
+    Max = 1,
+    Default = 0.03,
+    Color = Color3.fromRGB(255, 255, 255),
+    Increment = 0.01,
+    ValueName = "seconds",
+    Callback = function(Value) mirage1Speed = Value end
+})
+
+TabFake:AddButton({
+    Name = "Speed Mirage 1",
+    Callback = function() loadstring(game:HttpGet("https://pastebin.com/raw/eGt71NRi"))() end
+})
+
+-- === MIRAGE 2 ===
+TabFake:AddSlider({
+    Name = "Speed Mirage 2 Delay",
+    Min = 0.01,
+    Max = 1,
+    Default = 0.03,
+    Color = Color3.fromRGB(255, 255, 255),
+    Increment = 0.01,
+    ValueName = "seconds",
+    Callback = function(Value) mirage2Speed = Value end
+})
+
+TabFake:AddButton({
+    Name = "Speed Mirage 2",
+    Callback = function()
+        local backpack = localPlayer:WaitForChild("Backpack")
+        local tool = Instance.new("Tool")
+        tool.Name = "Speed Mirage"
+        tool.RequiresHandle = false
+        tool.Parent = backpack
+
+        local mouse = nil
+        local running = false
+        local loopCoroutine = nil
+        local clickConnection = nil
+
+        tool.Equipped:Connect(function()
+            mouse = localPlayer:GetMouse()
+            local function toggleTeleport()
+                if running then
+                    running = false
+                    unfreezeCamera()
+                    if loopCoroutine then loopCoroutine = nil end
+                else
+                    local character = localPlayer.Character
+                    if not character then return end
+                    local hrp = character:FindFirstChild("HumanoidRootPart")
+                    if not hrp then return end
+
+                    freezeCamera()
+                    local originalPos = hrp.CFrame
+                    local targetPos = CFrame.new(mouse.Hit.p.X, hrp.Position.Y, mouse.Hit.p.Z)
+
+                    running = true
+                    loopCoroutine = coroutine.create(function()
+                        while running do
+                            local currentCharacter = localPlayer.Character
+                            if not currentCharacter then break end
+                            local root = currentCharacter:FindFirstChild("HumanoidRootPart")
+                            if not root then break end
+
+                            -- Combat Target Override
+                            if _G.CombatMode and _G.AimTarget then
+                                targetPos = _G.AimTarget.CFrame
+                            end
+
+                            root.CFrame = targetPos
+                            task.wait(mirage2Speed)
+                            root.CFrame = originalPos
+                            task.wait(mirage2Speed)
+                        end
+                    end)
+                    coroutine.resume(loopCoroutine)
+                end
+            end
+            clickConnection = mouse.Button1Down:Connect(toggleTeleport)
+        end)
+
+        tool.Unequipped:Connect(function()
+            running = false
+            unfreezeCamera()
+            if clickConnection then clickConnection:Disconnect() clickConnection = nil end
+        end)
+    end
+})
+
+-- === MIRAGE 3 ===
+TabFake:AddSlider({
+    Name = "Speed Mirage 3 Min Speed",
+    Min = 0.1, Max = 1, Default = 0.5, Increment = 0.05, ValueName = "seconds",
+    Callback = function(Value) mirage3MinSpeed = Value end
+})
+TabFake:AddSlider({
+    Name = "Speed Mirage 3 Max Speed",
+    Min = 0.01, Max = 0.5, Default = 0.03, Increment = 0.01, ValueName = "seconds",
+    Callback = function(Value) mirage3MaxSpeed = Value end
+})
+TabFake:AddSlider({
+    Name = "Speed Mirage 3 Acceleration",
+    Min = 0.01, Max = 0.1, Default = 0.05, Increment = 0.01, ValueName = "rate",
+    Callback = function(Value) mirage3Acceleration = Value end
+})
+
+TabFake:AddButton({
+    Name = "Speed Mirage 3 (5 clones)",
+    Callback = function()
+        local backpack = localPlayer:WaitForChild("Backpack")
+        local tool = Instance.new("Tool")
+        tool.Name = "Speed Mirage (5 clone)"
+        tool.RequiresHandle = false
+        tool.Parent = backpack
+
+        local mouse = nil
+        local running = false
+        local loopCoroutine = nil
+        local clickConnection = nil
+        local currentDelay = mirage3MinSpeed
+
+        tool.Equipped:Connect(function()
+            mouse = localPlayer:GetMouse()
+            local function toggleTeleport()
+                if running then
+                    running = false
+                    unfreezeCamera()
+                    if loopCoroutine then loopCoroutine = nil end
+                else
+                    local character = localPlayer.Character
+                    if not character then return end
+                    local hrp = character:FindFirstChild("HumanoidRootPart")
+                    if not hrp then return end
+                    
+                    freezeCamera()
+                    local originalPos = hrp.CFrame
+                    local targetPos = CFrame.new(mouse.Hit.p.X, hrp.Position.Y, mouse.Hit.p.Z)
+
+                    running = true
+                    currentDelay = mirage3MinSpeed
+                    loopCoroutine = coroutine.create(function()
+                        while running do
+                            local currentCharacter = localPlayer.Character
+                            if not currentCharacter then break end
+                            local root = currentCharacter:FindFirstChild("HumanoidRootPart")
+                            if not root then break end
+
+                            -- Combat Target Override
+                            if _G.CombatMode and _G.AimTarget then
+                                targetPos = _G.AimTarget.CFrame
+                            end
+
+                            root.CFrame = targetPos
+                            task.wait(currentDelay)
+                            root.CFrame = originalPos
+                            task.wait(currentDelay)
+                            
+                            if currentDelay > mirage3MaxSpeed then
+                                currentDelay = math.max(mirage3MaxSpeed, currentDelay - mirage3Acceleration)
+                            end
+                        end
+                    end)
+                    coroutine.resume(loopCoroutine)
+                end
+            end
+            clickConnection = mouse.Button1Down:Connect(toggleTeleport)
+        end)
+
+        tool.Unequipped:Connect(function()
+            running = false
+            unfreezeCamera()
+            currentDelay = mirage3MinSpeed
+            if clickConnection then clickConnection:Disconnect() clickConnection = nil end
+        end)
+    end
+})
+
+-- === MIRAGE 4 ===
+TabFake:AddLabel("=== Mire 4 Settings ===")
+
+TabFake:AddSlider({
+    Name = "Mire 4 Speed (0 - 1s)",
+    Min = 0, Max = 1, Default = 0.01, Increment = 0.001, ValueName = "seconds",
+    Callback = function(Value) mirage4Speed = Value end
+})
+
+TabFake:AddSlider({
+    Name = "Mire 4 Clones (2 - 10)",
+    Min = 2, Max = 10, Default = 2, Increment = 1, ValueName = "clones",
+    Callback = function(Value) mirage4CloneCount = Value end
+})
+
+TabFake:AddButton({
+    Name = "Tạo Menu Mire 4 (Hình tròn)",
+    Callback = function()
+        if localPlayer.PlayerGui:FindFirstChild("Mire4UI") then return end
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "Mire4UI"
+        gui.ResetOnSpawn = false
+        gui.Parent = localPlayer:WaitForChild("PlayerGui")
+
+        local mainFrame = Instance.new("Frame")
+        mainFrame.Size = UDim2.new(0.12, 0, 0.12, 0)
+        mainFrame.Position = UDim2.new(0.85, 0, 0.7, 0)
+        mainFrame.SizeConstraint = Enum.SizeConstraint.RelativeYY
+        mainFrame.BackgroundTransparency = 1
+        mainFrame.Active = true
+        mainFrame.Draggable = true
+        mainFrame.Parent = gui
+
+        local toggleBtn = Instance.new("TextButton")
+        toggleBtn.Size = UDim2.new(1, 0, 1, 0)
+        toggleBtn.Text = "MIRE 4:\nOFF"
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+        toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        toggleBtn.Font = Enum.Font.GothamBold
+        toggleBtn.TextScaled = true
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0.5, 0)
+        corner.Parent = toggleBtn
+        toggleBtn.Parent = mainFrame
+
+        local mire4Running = false
+        local loopCoroutine = nil
+        local clickConn = nil
+
+        toggleBtn.MouseButton1Click:Connect(function()
+            mire4Running = not mire4Running
+            
+            if mire4Running then
+                toggleBtn.Text = "MIRE 4:\nON"
+                toggleBtn.BackgroundColor3 = Color3.fromRGB(40, 200, 40)
+                freezeCamera()
+
+                local mouse = localPlayer:GetMouse()
+                local char = localPlayer.Character
+                if not char then mire4Running = false unfreezeCamera() return end
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hrp then mire4Running = false unfreezeCamera() return end
+
+                local originalPos = hrp.CFrame
+                local currentRotation = hrp.CFrame.Rotation
+                local targetPos = CFrame.new(mouse.Hit.p.X, hrp.Position.Y, mouse.Hit.p.Z) * currentRotation
+
+                -- FIX LỖI 2: Dịch chuyển động khi click chuột trong lúc đang bật Mire 4
+                clickConn = mouse.Button1Down:Connect(function()
+                    if mire4Running and not _G.AimTarget then
+                        -- Update điểm đến thành điểm mới click
+                        targetPos = CFrame.new(mouse.Hit.p.X, hrp.Position.Y, mouse.Hit.p.Z) * currentRotation
+                    end
+                end)
+
+                loopCoroutine = coroutine.create(function()
+                    while mire4Running do
+                        local currentCharacter = localPlayer.Character
+                        if not currentCharacter then break end
+                        local root = currentCharacter:FindFirstChild("HumanoidRootPart")
+                        if not root then break end
+
+                        -- FIX LỖI 3 & COMBAT: Dịch chuyển thẳng tới đối thủ
+                        if _G.CombatMode and _G.AimTarget then
+                            -- Ép mục tiêu là vị trí của người chơi bị dính tâm ngắm
+                            targetPos = _G.AimTarget.CFrame
+                        end
+
+                        local points = {originalPos}
+                        if mirage4CloneCount > 2 then
+                            for i = 1, mirage4CloneCount - 2 do
+                                local alpha = i / (mirage4CloneCount - 1)
+                                table.insert(points, originalPos:Lerp(targetPos, alpha))
+                            end
+                        end
+                        table.insert(points, targetPos)
+
+                        for _, pos in ipairs(points) do
+                            if not mire4Running then break end
+                            root.CFrame = pos
+                            
+                            if mirage4Speed <= 0 then
+                                RunService.RenderStepped:Wait()
+                            else
+                                task.wait(mirage4Speed)
+                            end
+                        end
+                    end
+                end)
+                coroutine.resume(loopCoroutine)
+            else
+                toggleBtn.Text = "MIRE 4:\nOFF"
+                toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+                unfreezeCamera()
+                if clickConn then clickConn:Disconnect() clickConn = nil end
+                if loopCoroutine then loopCoroutine = nil end
+            end
+        end)
+    end
+})
+
+-- // Rank Tags (Local)
+local RankConfig = {
+    Owner = { users = {"maykon_adm"}, tag = "{Owner}", color = Color3.new(1, 0.84, 0) },
+    Admin = { users = {"AdminUsername1"}, tag = "[Admin]", color = Color3.new(1, 0, 0) },
+    HeadAdmin = { users = {"HeadAdminUsername"}, tag = "[Head Admin]", color = Color3.new(0.5, 0, 0) },
+    Friend = { users = {"FriendUsername1"}, tag = "[Friend]", color = Color3.new(0.6, 0.3, 0.1) }
+}
+
+local function getPlayerRank(player)
+    local username = player.Name
+    for _, ownerName in pairs(RankConfig.Owner.users) do if username == ownerName then return RankConfig.Owner end end
+    for _, headAdminName in pairs(RankConfig.HeadAdmin.users) do if username == headAdminName then return RankConfig.HeadAdmin end end
+    for _, adminName in pairs(RankConfig.Admin.users) do if username == adminName then return RankConfig.Admin end end
+    for _, friendName in pairs(RankConfig.Friend.users) do if username == friendName then return RankConfig.Friend end end
+    return nil
+end
+
+local function createTag(player, rankData)
+    local character = player.Character
+    if not character then return end
+    local head = character:FindFirstChild("Head")
+    if not head then return end
+    local existingTag = head:FindFirstChild("RankTag")
+    if existingTag then existingTag:Destroy() end
+    local billboardGui = Instance.new("BillboardGui")
+    billboardGui.Name = "RankTag"
+    billboardGui.Size = UDim2.new(0, 200, 0, 50)
+    billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+    billboardGui.Parent = head
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = rankData.tag
+    textLabel.TextColor3 = rankData.color
+    textLabel.TextScaled = true
+    textLabel.Font = Enum.Font.GothamBold
+    textLabel.TextStrokeTransparency = 0
+    textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+    textLabel.Parent = billboardGui
+end
+
+local function onCharacterAdded(player)
+    player.CharacterAdded:Connect(function(character)
+        task.wait(1)
+        local rankData = getPlayerRank(player)
+        if rankData then createTag(player, rankData) end
+    end)
+    if player.Character then
+        task.wait(1)
+        local rankData = getPlayerRank(player)
+        if rankData then createTag(player, rankData) end
+    end
+end
+
+for _, player in pairs(Players:GetPlayers()) do onCharacterAdded(player) end
+Players.PlayerAdded:Connect(onCharacterAdded)
+
+spawn(function()
+    while true do
+        task.wait(30)
+        for _, player in pairs(Players:GetPlayers()) do
+            if player.Character then
+                local rankData = getPlayerRank(player)
+                if rankData then createTag(player, rankData) end
+            end
+        end
+    end
+end)
+
+OrionLib:Init()
