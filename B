@@ -1,0 +1,240 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local CoreGui = game:GetService("CoreGui")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- Khởi tạo UI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CircleRunGui_V6"
+ScreenGui.Parent = CoreGui
+
+local screenSize = Camera.ViewportSize
+local btnSize = screenSize.Y * 0.08 
+
+local Button = Instance.new("TextButton")
+Button.Size = UDim2.new(0, btnSize, 0, btnSize)
+Button.Position = UDim2.new(0.5, -btnSize/2, 0.8, 0)
+Button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Button.Text = "TẮT"
+Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+Button.Font = Enum.Font.GothamBold
+Button.TextSize = btnSize * 0.25
+Button.AutoButtonColor = false
+Button.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0.5, 0)
+UICorner.Parent = Button
+
+local UIStroke = Instance.new("UIStroke")
+UIStroke.Color = Color3.fromRGB(255, 255, 255)
+UIStroke.Thickness = 3
+UIStroke.Parent = Button
+
+-- Biến trạng thái
+local currentMode = "NONE"
+local isLockedMenu = false
+local isHolding = false
+local holdStartTime = 0
+local dragging = false
+local dragStart, startPos
+
+-- Logic kéo thả mượt
+Button.InputBegan:Connect(function(input)
+	if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) and not isLockedMenu then
+		dragging = true
+		dragStart = input.Position
+		startPos = Button.Position
+		
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStart
+		local targetPos = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		TweenService:Create(Button, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = targetPos}):Play()
+	end
+end)
+
+-- LOGIC AUTO RUN (Fix lỗi Shift-Lock)
+local runConnection
+local currentTarget = nil
+
+local function triggerSprint()
+	task.spawn(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+		task.wait(0.05)
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+		task.wait(0.05)
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+	end)
+end
+
+local function releaseSprint()
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+end
+
+local function stopRunning()
+	if runConnection then runConnection:Disconnect() end
+	currentTarget = nil
+	currentMode = "NONE"
+	Button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	Button.Text = isLockedMenu and "LOCKED" or "TẮT"
+    
+    releaseSprint()
+    
+    -- Trả lại quyền xoay mặt cho Shift-Lock và game khi tắt chế độ
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+        LocalPlayer.Character.Humanoid:Move(Vector3.new(0,0,0), false)
+        LocalPlayer.Character.Humanoid.AutoRotate = true 
+    end
+end
+
+local function getPlayerInCrosshair()
+	local center = Camera.ViewportSize / 2
+	local closestPlayer, minDistance = nil, 60 
+	for _, p in pairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
+			local pos, onScreen = Camera:WorldToViewportPoint(p.Character.HumanoidRootPart.Position)
+			if onScreen then
+				local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+				if dist < minDistance then minDistance = dist; closestPlayer = p end
+			end
+		end
+	end
+	return closestPlayer
+end
+
+local function getNearestPlayer()
+	local nearest, minDistance = nil, math.huge
+	local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return nil end
+	for _, p in pairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
+			local dist = (p.Character.HumanoidRootPart.Position - myRoot.Position).Magnitude
+			if dist < minDistance then minDistance = dist; nearest = p end
+		end
+	end
+	return nearest
+end
+
+-- Hàm cốt lõi
+local function chaseTarget(target)
+    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+        local myChar = LocalPlayer.Character
+        if myChar and myChar:FindFirstChild("Humanoid") and myChar:FindFirstChild("HumanoidRootPart") then
+            
+            local myRoot = myChar.HumanoidRootPart
+            local targetRoot = target.Character.HumanoidRootPart
+            
+            local backOffset = 3 
+            local targetBackPosition = targetRoot.Position - (targetRoot.CFrame.LookVector * backOffset)
+            
+            local flatBackPos = Vector3.new(targetBackPosition.X, myRoot.Position.Y, targetBackPosition.Z)
+            local flatTargetPos = Vector3.new(targetRoot.Position.X, myRoot.Position.Y, targetRoot.Position.Z)
+            
+            local distanceToBack = (flatBackPos - myRoot.Position).Magnitude
+            
+            -- FIX SHIFT-LOCK: Khóa chức năng tự động xoay của game
+            myChar.Humanoid.AutoRotate = false 
+            
+            -- Ép góc mặt nhìn thẳng mục tiêu
+            myRoot.CFrame = CFrame.new(myRoot.Position, flatTargetPos)
+            
+            if distanceToBack > 1.5 then
+                local direction = (flatBackPos - myRoot.Position).Unit
+                myChar.Humanoid:Move(direction, false)
+            else
+                myChar.Humanoid:Move(Vector3.new(0,0,0), false)
+            end
+        end
+    end
+end
+
+local function startCrosshairMode()
+	stopRunning()
+	currentMode = "CROSSHAIR"
+	Button.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+	Button.Text = "TÂM\nNGẮM"
+	
+	triggerSprint() 
+	
+	runConnection = RunService.RenderStepped:Connect(function()
+		if not currentTarget or not currentTarget.Character or currentTarget.Character.Humanoid.Health <= 0 then
+			currentTarget = getPlayerInCrosshair()
+		else
+            chaseTarget(currentTarget)
+        end
+	end)
+end
+
+local function startNearestMode()
+	stopRunning()
+	currentMode = "NEAREST"
+	Button.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+	Button.Text = "GẦN\nNHẤT"
+	
+	triggerSprint() 
+	
+	runConnection = RunService.RenderStepped:Connect(function()
+		currentTarget = getNearestPlayer()
+        if currentTarget then
+            chaseTarget(currentTarget)
+        end
+	end)
+end
+
+-- Xử lý Nhấn giữ Menu
+Button.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		isHolding = true
+		holdStartTime = tick()
+		
+		task.spawn(function()
+			local lockedTriggered = false
+			local nearestTriggered = false
+			
+			while isHolding do
+				local elapsed = tick() - holdStartTime
+				
+				if elapsed >= 3 and not lockedTriggered then
+					lockedTriggered = true
+					isLockedMenu = not isLockedMenu
+					UIStroke.Color = isLockedMenu and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+					Button.Text = isLockedMenu and "LOCKED" or "UNLOCKED"
+					task.wait(0.5)
+					if currentMode == "NONE" then Button.Text = isLockedMenu and "LOCKED" or "TẮT" end
+				
+				elseif elapsed >= 0.3 and not nearestTriggered and not lockedTriggered then
+					nearestTriggered = true
+				end
+				task.wait(0.1)
+			end
+		end)
+	end
+end)
+
+Button.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		local duration = tick() - holdStartTime
+		isHolding = false
+		
+		if duration < 0.3 then
+			if currentMode == "CROSSHAIR" then stopRunning() else startCrosshairMode() end
+		elseif duration >= 0.3 and duration < 3 then
+			if currentMode == "NEAREST" then stopRunning() else startNearestMode() end
+		end
+	end
+end)
