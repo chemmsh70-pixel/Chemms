@@ -1,0 +1,268 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- Khởi tạo UI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CircleRunGui_V13"
+ScreenGui.Parent = CoreGui
+
+local screenSize = Camera.ViewportSize
+local btnSize = screenSize.Y * 0.12
+
+local Button = Instance.new("TextButton")
+Button.Size = UDim2.new(0, btnSize, 0, btnSize)
+Button.Position = UDim2.new(0.5, -btnSize/2, 0.8, 0)
+Button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Button.Text = "TẮT"
+Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+Button.Font = Enum.Font.GothamBold
+Button.TextSize = btnSize * 0.25
+Button.AutoButtonColor = false
+Button.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0.5, 0)
+UICorner.Parent = Button
+
+local UIStroke = Instance.new("UIStroke")
+UIStroke.Color = Color3.fromRGB(255, 255, 255)
+UIStroke.Thickness = 3
+UIStroke.Parent = Button
+
+-- Ô TextBox ẩn để gọi bàn phím
+local DistanceInput = Instance.new("TextBox")
+DistanceInput.Size = UDim2.new(0, btnSize * 2.2, 0, btnSize * 0.5)
+DistanceInput.Position = UDim2.new(0.5, -btnSize * 1.1, -0.7, 0) -- Nổi ngay trên đầu cái nút
+DistanceInput.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+DistanceInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+DistanceInput.Font = Enum.Font.GothamBold
+DistanceInput.TextSize = btnSize * 0.22
+DistanceInput.PlaceholderText = "Khoảng cách..."
+DistanceInput.ClearTextOnFocus = true
+DistanceInput.Visible = false
+DistanceInput.Parent = Button
+
+local UICorner2 = Instance.new("UICorner")
+UICorner2.CornerRadius = UDim.new(0.3, 0)
+UICorner2.Parent = DistanceInput
+
+-- Biến trạng thái
+local currentMode = "NONE"
+local isLockedMenu = false
+local isHolding = false
+local hasDragged = false -- Biến fix lỗi nhận nhầm click khi đang kéo menu
+local holdStartTime = 0
+local dragging = false
+local dragStart, startPos
+
+local currentBackOffset = 3.5 -- Mặc định đứng sau lưng 3.5 studs
+local runConnection
+local currentTarget = nil
+
+-- Cập nhật giao diện nút chuẩn
+local function updateButtonUI()
+    if isHolding then return end 
+    if currentMode == "NONE" then
+        Button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        Button.Text = isLockedMenu and "LOCKED" or "TẮT"
+    elseif currentMode == "CROSSHAIR" then
+        Button.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+        Button.Text = "TÂM\nNGẮM"
+    elseif currentMode == "NEAREST" then
+        Button.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        Button.Text = "GẦN\nNHẤT"
+    end
+    UIStroke.Color = isLockedMenu and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+end
+
+-- Xử lý Nhập Khoảng Cách
+DistanceInput.FocusLost:Connect(function()
+    DistanceInput.Visible = false
+    local num = tonumber(DistanceInput.Text)
+    if num ~= nil then
+        currentBackOffset = num
+        Button.Text = "OK: " .. tostring(num)
+    else
+        Button.Text = "LỖI SỐ"
+    end
+    task.wait(1)
+    updateButtonUI()
+end)
+
+-- Thuật toán Điểm Neo (Chạy mượt ra sau lưng)
+local function chaseTarget(target)
+    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+        local myChar = LocalPlayer.Character
+        if myChar and myChar:FindFirstChild("Humanoid") and myChar:FindFirstChild("HumanoidRootPart") then
+            
+            local myRoot = myChar.HumanoidRootPart
+            local targetRoot = target.Character.HumanoidRootPart
+            
+            -- Lấy số ông vừa nhập trên bàn phím (currentBackOffset) làm điểm neo
+            local virtualNodeCFrame = targetRoot.CFrame * CFrame.new(0, 0, currentBackOffset)
+            local virtualNodePos = Vector3.new(virtualNodeCFrame.Position.X, myRoot.Position.Y, virtualNodeCFrame.Position.Z)
+            local distanceToNode = (virtualNodePos - myRoot.Position).Magnitude
+            
+            myChar.Humanoid.AutoRotate = false 
+            myRoot.CFrame = CFrame.new(myRoot.Position, Vector3.new(targetRoot.Position.X, myRoot.Position.Y, targetRoot.Position.Z))
+            
+            if distanceToNode > 0.8 then
+                local direction = (virtualNodePos - myRoot.Position).Unit
+                myChar.Humanoid:Move(direction, false)
+            else
+                myChar.Humanoid:Move(Vector3.new(0, 0, 0), false)
+            end
+        end
+    end
+end
+
+local function stopRunning()
+	if runConnection then runConnection:Disconnect() end
+	currentTarget = nil
+	currentMode = "NONE"
+	updateButtonUI()
+    
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+        LocalPlayer.Character.Humanoid:Move(Vector3.new(0,0,0), false)
+        LocalPlayer.Character.Humanoid.AutoRotate = true 
+    end
+end
+
+local function getPlayerInCrosshair()
+	local center = Camera.ViewportSize / 2
+	local closestPlayer, minDistance = nil, 60 
+	for _, p in pairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
+			local pos, onScreen = Camera:WorldToViewportPoint(p.Character.HumanoidRootPart.Position)
+			if onScreen then
+				local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+				if dist < minDistance then minDistance = dist; closestPlayer = p end
+			end
+		end
+	end
+	return closestPlayer
+end
+
+local function getNearestPlayer()
+	local nearest, minDistance = nil, math.huge
+	local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return nil end
+	for _, p in pairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
+			local dist = (p.Character.HumanoidRootPart.Position - myRoot.Position).Magnitude
+			if dist < minDistance then minDistance = dist; nearest = p end
+		end
+	end
+	return nearest
+end
+
+local function startCrosshairMode()
+	stopRunning()
+	currentMode = "CROSSHAIR"
+	updateButtonUI()
+	runConnection = RunService.RenderStepped:Connect(function()
+		if not currentTarget or not currentTarget.Character or currentTarget.Character.Humanoid.Health <= 0 then
+			currentTarget = getPlayerInCrosshair()
+		else
+            chaseTarget(currentTarget)
+        end
+	end)
+end
+
+local function startNearestMode()
+	stopRunning()
+	currentMode = "NEAREST"
+	updateButtonUI()
+	runConnection = RunService.RenderStepped:Connect(function()
+		currentTarget = getNearestPlayer()
+        if currentTarget then
+            chaseTarget(currentTarget)
+        end
+	end)
+end
+
+-- LOGIC KÉO MENU (Có check chống vuốt nhầm)
+Button.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		hasDragged = false 
+		if not isLockedMenu then
+			dragging = true
+			dragStart = input.Position
+			startPos = Button.Position
+		end
+		
+		isHolding = true
+		holdStartTime = tick()
+		
+		-- Loop hiển thị hướng dẫn khi đè phím (Rất trực quan)
+		task.spawn(function()
+			while isHolding do
+				local elapsed = tick() - holdStartTime
+				if elapsed >= 3 then
+					Button.Text = "CHỈNH\nKC"
+					Button.BackgroundColor3 = Color3.fromRGB(200, 150, 0)
+				elseif elapsed >= 2 then
+					Button.Text = isLockedMenu and "MỞ\nKHÓA" or "KHÓA\nMENU"
+					Button.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+				elseif elapsed >= 0.3 then
+					Button.Text = (currentMode == "NEAREST") and "TẮT\nGẦN" or "BẬT\nGẦN"
+					Button.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+				end
+				task.wait(0.05)
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and not isLockedMenu and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStart
+		if delta.Magnitude > 10 then 
+		    hasDragged = true -- Nếu dịch ngón tay ra xa quá 10 pixel -> Đang muốn kéo menu chứ không phải click!
+		end
+		local targetPos = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		TweenService:Create(Button, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = targetPos}):Play()
+	end
+end)
+
+-- THẢ TAY KÍCH HOẠT THEO THỜI GIAN
+Button.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+		if not isHolding then return end
+		
+		local duration = tick() - holdStartTime
+		isHolding = false
+		
+		-- Khống chế lỗi: Nếu ông vừa vuốt lướt qua cái nút, nó sẽ không bật tính năng lung tung
+		if hasDragged then
+		    hasDragged = false
+		    updateButtonUI()
+		    return
+		end
+		
+		-- Chia mốc thời gian thả ngón tay
+		if duration < 0.3 then
+			if currentMode == "CROSSHAIR" then stopRunning() else startCrosshairMode() end
+			
+		elseif duration >= 0.3 and duration < 2 then
+			if currentMode == "NEAREST" then stopRunning() else startNearestMode() end
+			
+		elseif duration >= 2 and duration < 3 then
+			isLockedMenu = not isLockedMenu
+			updateButtonUI()
+			
+		elseif duration >= 3 then
+			-- Bật tính năng Nhập khoảng cách 
+			DistanceInput.Visible = true
+			DistanceInput.Text = tostring(currentBackOffset)
+			DistanceInput:CaptureFocus() -- Ép bàn phím ảo bật lên ngay lập tức
+			Button.Text = "NHẬP\nSỐ"
+		end
+	end
+end)
