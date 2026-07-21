@@ -1,0 +1,245 @@
+--[[
+GALAXY AIM FINAL - SHIFT LOCK FIX (NO CROWD) + AIM BEHIND
+
+1. FIX SHIFT LOCK: Ép nhân vật xoay theo địch bất chấp Shift Lock.  
+2. MODE:   
+   - Click nhẹ: LOCK (Ghim tâm người đang nhìn).  
+   - Giữ 1 giây: AUTO (Tự aim người gần nhất).  
+3. UI: Nhỏ gọn, Galaxy Cực Quang.
+4. AIM BEHIND: Tự động xoay mặt ra sau lưng mục tiêu.
+
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- // Cấu hình //
+local Settings = {
+    Range = 2500,          -- Tầm xa (Auto)
+    FOV = 400,             -- Góc tìm (Lock)
+    Speed = 2,             -- Tốc độ màu Neon
+    TeamCheck = false,
+    DistanceBehind = 2     -- Tùy chỉnh khoảng cách sau lưng (studs)
+}
+
+local Mode = "OFF" -- Chỉ còn: "OFF", "LOCK", "AUTO"
+local LockedTarget = nil
+
+-- // UI SETUP //
+local ScreenGui = Instance.new("ScreenGui")
+local MainButton = Instance.new("TextButton")
+local UICorner = Instance.new("UICorner")
+local UIStroke = Instance.new("UIStroke")
+
+ScreenGui.Name = "GalaxyAim_FinalFix"
+ScreenGui.Parent = game:GetService("CoreGui")
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+-- Nút 50x50 (Nhỏ gọn)
+MainButton.Name = "ToggleBtn"
+MainButton.Parent = ScreenGui
+MainButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+MainButton.Position = UDim2.new(0.85, 0, 0.4, 0)
+MainButton.Size = UDim2.new(0, 50, 0, 50)
+MainButton.Font = Enum.Font.FredokaOne
+MainButton.Text = "OFF"
+MainButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+MainButton.TextSize = 13.000
+MainButton.AutoButtonColor = false
+
+UICorner.CornerRadius = UDim.new(1, 0)
+UICorner.Parent = MainButton
+
+UIStroke.Parent = MainButton
+UIStroke.Thickness = 3
+UIStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+-- // MÀU CỰC QUANG (VIBRANT LOOP) //
+task.spawn(function()
+    local h = 0
+    while true do
+        h = h + (Settings.Speed/800)
+        if h > 1 then h = 0 end
+
+        local neonColor = Color3.fromHSV(h, 1, 1) -- Màu sáng nhất  
+        UIStroke.Color = neonColor  
+          
+        if Mode == "OFF" then  
+            MainButton.TextColor3 = neonColor  
+            MainButton.BackgroundColor3 = Color3.fromRGB(10, 10, 10)  
+        elseif Mode == "LOCK" then  
+            MainButton.TextColor3 = Color3.fromRGB(255, 255, 255)  
+            MainButton.BackgroundColor3 = Color3.fromHSV(0, 0.9, 0.8) -- Đỏ báo hiệu Lock  
+        elseif Mode == "AUTO" then  
+            MainButton.TextColor3 = Color3.fromRGB(0, 0, 0)  
+            MainButton.BackgroundColor3 = Color3.fromHSV(0.35, 1, 1) -- Xanh Neon báo hiệu Auto  
+        end  
+          
+        task.wait()  
+    end
+end)
+
+-- // KÉO THẢ //
+local dragging, dragInput, dragStart, startPos
+local function update(input)
+    local delta = input.Position - dragStart
+    MainButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+MainButton.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then dragInput = input end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then update(input) end
+end)
+
+-- // LOGIC NÚT BẤM (ĐÃ BỎ CROWD) //
+local pressStartTime = 0
+local isHolding = false
+
+MainButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isHolding = true
+        dragging = true
+        dragStart = input.Position
+        startPos = MainButton.Position
+        pressStartTime = tick()
+
+        task.spawn(function()  
+            while isHolding do  
+                local duration = tick() - pressStartTime  
+                  
+                -- Từ OFF -> AUTO (Giữ 1 giây)  
+                if Mode == "OFF" then  
+                    if duration > 0.2 then MainButton.Text = "." end  
+                    if duration >= 1 then  
+                        Mode = "AUTO"  
+                        MainButton.Text = "AUTO"  
+                        isHolding = false   
+                        break  
+                    end  
+                end  
+                task.wait(0.1)  
+            end  
+        end)  
+    end
+end)
+
+MainButton.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isHolding = false
+        dragging = false
+        local duration = tick() - pressStartTime
+
+        if duration < 0.5 then  
+            -- Click nhanh  
+            if Mode == "OFF" then  
+                -- >> BẬT LOCK <<  
+                Mode = "LOCK"  
+                MainButton.Text = "LOCK"  
+                LockedTarget = getTargetByCrosshair()  
+            else  
+                -- >> TẮT <<  
+                Mode = "OFF"  
+                MainButton.Text = "OFF"  
+                LockedTarget = nil  
+                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then  
+                    LocalPlayer.Character.Humanoid.AutoRotate = true  
+                end  
+            end  
+        else  
+            -- Giữ lỡ cỡ  
+            if Mode == "AUTO" then MainButton.Text = "AUTO" end  
+            if Mode == "OFF" then MainButton.Text = "OFF" end  
+        end  
+    end
+end)
+
+-- // LOGIC TÌM MỤC TIÊU //
+
+-- 1. Aim Lock (Crosshair)
+function getTargetByCrosshair()
+    local closest = nil
+    local shortestDistance = Settings.FOV
+    local centerScreen = Camera.ViewportSize / 2
+
+    for _, player in pairs(Players:GetPlayers()) do  
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Humanoid") then  
+            if player.Character.Humanoid.Health > 0 then  
+                if Settings.TeamCheck and player.Team == LocalPlayer.Team then continue end  
+                local screenPos, onScreen = Camera:WorldToViewportPoint(player.Character.HumanoidRootPart.Position)  
+                if onScreen then  
+                    local distToCenter = (Vector2.new(screenPos.X, screenPos.Y) - centerScreen).Magnitude  
+                    if distToCenter < shortestDistance then  
+                        closest = player  
+                        shortestDistance = distToCenter  
+                    end  
+                end  
+            end  
+        end  
+    end  
+    return closest
+end
+
+-- 2. Auto (Gần nhất)
+function getClosestPlayer()
+    local closest = nil
+    local shortestDistance = Settings.Range
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+
+    for _, player in pairs(Players:GetPlayers()) do  
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Humanoid") then  
+            if player.Character.Humanoid.Health > 0 then  
+                if Settings.TeamCheck and player.Team == LocalPlayer.Team then continue end  
+                local dist = (player.Character.HumanoidRootPart.Position - myRoot.Position).Magnitude  
+                if dist < shortestDistance then  
+                    closest = player  
+                    shortestDistance = dist  
+                end  
+            end  
+        end  
+    end  
+    return closest
+end
+
+-- // RENDER LOOP + SHIFT LOCK FIX + AIM BEHIND //
+-- Dùng Priority cao để thắng Shift Lock
+RunService:BindToRenderStep("SilentAimFixFinal", Enum.RenderPriority.Camera.Value + 1, function()
+    local targetChar = nil
+
+    if Mode == "LOCK" then  
+        if LockedTarget and LockedTarget.Character and LockedTarget.Character:FindFirstChild("HumanoidRootPart") and LockedTarget.Character.Humanoid.Health > 0 then  
+            targetChar = LockedTarget.Character  
+        end  
+    elseif Mode == "AUTO" then  
+        local p = getClosestPlayer()  
+        if p then targetChar = p.Character end  
+    end  
+
+    local myChar = LocalPlayer.Character  
+    if targetChar and targetChar:FindFirstChild("HumanoidRootPart") and myChar and myChar:FindFirstChild("HumanoidRootPart") and myChar:FindFirstChild("Humanoid") then  
+          
+        -- [QUAN TRỌNG] Tắt xoay của game liên tục mỗi khung hình  
+        myChar.Humanoid.AutoRotate = false  
+
+        -- Lấy vị trí và tính toán tọa độ đằng sau lưng
+        local targetRoot = targetChar.HumanoidRootPart
+        local myPos = myChar.HumanoidRootPart.Position
+        
+        -- Lấy vị trí hiện tại của địch TRỪ ĐI hướng nhìn của địch * khoảng cách cấu hình = Vị trí sau lưng
+        local targetBackPos = targetRoot.Position - (targetRoot.CFrame.LookVector * Settings.DistanceBehind)
+          
+        -- Xoay nhân vật  
+        local newCFrame = CFrame.new(myPos, Vector3.new(targetBackPos.X, myPos.Y, targetBackPos.Z))  
+        myChar.HumanoidRootPart.CFrame = myChar.HumanoidRootPart.CFrame:Lerp(newCFrame, 0.5)   
+          
+    else  
+        -- Trả lại quyền xoay khi không aim  
+        if myChar and myChar:FindFirstChild("Humanoid") and Mode == "OFF" then  
+            myChar.Humanoid.AutoRotate = true  
+        end  
+    end
+end)
