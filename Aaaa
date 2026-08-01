@@ -1,0 +1,258 @@
+local Players = game:GetService("Players")
+local Player = Players.LocalPlayer
+local UIS = game:GetService("UserInputService")
+
+-- Chờ giao diện tải
+local PlayerGui = Player:WaitForChild("PlayerGui")
+if PlayerGui:FindFirstChild("GalaxyMultiEquip") then
+	PlayerGui.GalaxyMultiEquip:Destroy()
+end
+
+-- ==========================================
+-- TẠO GIAO DIỆN CHÍNH
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "GalaxyMultiEquip"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = PlayerGui
+
+-- KHUNG MENU CHÍNH
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0.4, 0, 0.5, 0) 
+MainFrame.Position = UDim2.new(0.5, - (workspace.CurrentCamera.ViewportSize.X * 0.2), 0.3, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+MainFrame.BackgroundTransparency = 0.2
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true 
+MainFrame.ClipsDescendants = true
+
+-- MÀU GALAXY CHO MENU CHÍNH
+local Gradient = Instance.new("UIGradient", MainFrame)
+Gradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 0, 60)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 20, 50)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 0, 20))
+})
+local UICorner = Instance.new("UICorner", MainFrame)
+UICorner.CornerRadius = UDim.new(0, 15)
+
+-- ==========================================
+-- NÚT ĐEO ĐỒ (✅) Ở GÓC TRÊN
+-- ==========================================
+local EquipBtn = Instance.new("TextButton", MainFrame)
+EquipBtn.Size = UDim2.new(0, 25, 0, 25)
+EquipBtn.Position = UDim2.new(1, -35, 0, 5) 
+EquipBtn.BackgroundTransparency = 1
+EquipBtn.Text = "✅"
+EquipBtn.Font = Enum.Font.GothamBold
+EquipBtn.TextSize = 18
+EquipBtn.TextColor3 = Color3.new(1, 1, 1)
+
+-- ==========================================
+-- GÓC KÉO ĐỂ THU NHỎ / PHÓNG TO (GÓC DƯỚI PHẢI)
+-- ==========================================
+local ResizeHandle = Instance.new("TextButton", MainFrame)
+ResizeHandle.Size = UDim2.new(0, 30, 0, 30)
+ResizeHandle.Position = UDim2.new(1, -30, 1, -30) 
+ResizeHandle.BackgroundTransparency = 1
+ResizeHandle.Text = "↘" 
+ResizeHandle.Font = Enum.Font.GothamBold
+ResizeHandle.TextSize = 20
+ResizeHandle.TextColor3 = Color3.fromRGB(200, 200, 200)
+
+local draggingResize = false
+local dragStartPos = nil
+local startAbsSize = nil
+
+ResizeHandle.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingResize = true
+		dragStartPos = input.Position
+		startAbsSize = MainFrame.AbsoluteSize
+		MainFrame.Size = UDim2.new(0, startAbsSize.X, 0, startAbsSize.Y) 
+	end
+end)
+
+UIS.InputChanged:Connect(function(input)
+	if draggingResize and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStartPos
+		local newX = math.max(100, startAbsSize.X + delta.X) 
+		local newY = math.max(50, startAbsSize.Y + delta.Y)  
+		MainFrame.Size = UDim2.new(0, newX, 0, newY)
+	end
+end)
+
+UIS.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingResize = false
+	end
+end)
+
+-- ==========================================
+-- KHUNG CUỘN CHỨA VẬT PHẨM
+-- ==========================================
+local Scroll = Instance.new("ScrollingFrame", MainFrame)
+Scroll.Size = UDim2.new(1, -20, 1, -40) 
+Scroll.Position = UDim2.new(0, 10, 0, 30)
+Scroll.BackgroundTransparency = 1
+Scroll.ScrollBarThickness = 4
+
+local GridLayout = Instance.new("UIGridLayout", Scroll)
+GridLayout.CellSize = UDim2.new(0.48, 0, 0, 45)
+GridLayout.CellPadding = UDim2.new(0.02, 0, 0, 5)
+GridLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- ==========================================
+-- NÚT USE (TO 5%, MÀU GALAXY, CÓ THỂ KÉO)
+-- ==========================================
+local UseBtn = Instance.new("TextButton", ScreenGui)
+UseBtn.Size = UDim2.new(0.05, 0, 0.05, 0) -- Thu nhỏ thành 5%
+UseBtn.SizeConstraint = Enum.SizeConstraint.RelativeXX
+UseBtn.Position = UDim2.new(0.85, 0, 0.75, 0)
+UseBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255) -- Để màu trắng để UIGradient hoạt động chuẩn
+UseBtn.Text = "USE"
+UseBtn.Font = Enum.Font.GothamBlack
+UseBtn.TextSize = 14 -- Chỉnh cỡ chữ cho vừa với nút 5%
+UseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+local UseBtnCorner = Instance.new("UICorner", UseBtn)
+UseBtnCorner.CornerRadius = UDim.new(1, 0)
+
+-- MÀU GALAXY CHO NÚT USE ĐỒNG BỘ VỚI MENU
+local UseGradient = Instance.new("UIGradient", UseBtn)
+UseGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 0, 60)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 20, 50)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 0, 20))
+})
+
+-- Logic kéo thả mượt cho nút USE
+local draggingUse, dragUseInput, dragUseStart, useStartPos
+UseBtn.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingUse = true
+		dragUseStart = input.Position
+		useStartPos = UseBtn.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then draggingUse = false end
+		end)
+	end
+end)
+UseBtn.InputChanged:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+		dragUseInput = input
+	end
+end)
+UIS.InputChanged:Connect(function(input)
+	if input == dragUseInput and draggingUse then
+		local delta = input.Position - dragUseStart
+		UseBtn.Position = UDim2.new(useStartPos.X.Scale, useStartPos.X.Offset + delta.X, useStartPos.Y.Scale, useStartPos.Y.Offset + delta.Y)
+	end
+end)
+
+-- ==========================================
+-- LOGIC HOẠT ĐỘNG
+-- ==========================================
+local SelectedTools = {}
+local Backpack = Player:WaitForChild("Backpack")
+
+local function RefreshList()
+	for _, child in pairs(Scroll:GetChildren()) do
+		if child:IsA("Frame") then child:Destroy() end
+	end
+	
+	for _, tool in pairs(Backpack:GetChildren()) do
+		if tool:IsA("Tool") then
+			local ToolFrame = Instance.new("Frame", Scroll)
+			ToolFrame.BackgroundColor3 = SelectedTools[tool] and Color3.fromRGB(80, 255, 80) or Color3.fromRGB(50, 50, 50)
+			ToolFrame.BackgroundTransparency = SelectedTools[tool] and 0.3 or 0.6
+			Instance.new("UICorner", ToolFrame).CornerRadius = UDim.new(0, 8)
+
+			local Icon = Instance.new("ImageLabel", ToolFrame)
+			Icon.Size = UDim2.new(0, 35, 0, 35)
+			Icon.Position = UDim2.new(0, 5, 0.5, -17.5)
+			Icon.BackgroundTransparency = 1
+			Icon.Image = tool.TextureId ~= "" and tool.TextureId or "rbxassetid://16608511202"
+
+			local NameLabel = Instance.new("TextLabel", ToolFrame)
+			NameLabel.Size = UDim2.new(1, -45, 1, 0)
+			NameLabel.Position = UDim2.new(0, 45, 0, 0)
+			NameLabel.BackgroundTransparency = 1
+			NameLabel.Text = tool.Name
+			NameLabel.TextColor3 = Color3.new(1, 1, 1)
+			NameLabel.Font = Enum.Font.GothamSemibold
+			NameLabel.TextSize = 12
+			NameLabel.TextXAlignment = Enum.TextXAlignment.Left
+			NameLabel.TextWrapped = true
+
+			local ClickBtn = Instance.new("TextButton", ToolFrame)
+			ClickBtn.Size = UDim2.new(1, 0, 1, 0)
+			ClickBtn.BackgroundTransparency = 1
+			ClickBtn.Text = ""
+
+			ClickBtn.MouseButton1Click:Connect(function()
+				if SelectedTools[tool] then
+					SelectedTools[tool] = nil
+				else
+					SelectedTools[tool] = tool
+				end
+				RefreshList()
+			end)
+		end
+	end
+	Scroll.CanvasSize = UDim2.new(0, 0, 0, math.ceil(#Backpack:GetChildren() / 2) * 50)
+end
+
+-- LỆNH 1: NHẤN ✅ ĐỂ ĐEO VŨ KHÍ VÀO NGƯỜI (Giữ nguyên gốc của ông)
+EquipBtn.MouseButton1Click:Connect(function()
+	local Char = Player.Character or Player.CharacterAdded:Wait()
+	local RightHand = Char:FindFirstChild("RightHand") or Char:FindFirstChild("Right Arm")
+	if not RightHand then return end
+
+	for tool, _ in pairs(SelectedTools) do
+		if tool and tool.Parent == Backpack then
+			tool.Parent = Char 
+			local handle = tool:FindFirstChild("Handle")
+			if handle then
+				local weld = Instance.new("Weld", handle)
+				weld.Name = "MultiEquipWeld"
+				weld.Part0 = RightHand
+				weld.Part1 = handle
+				weld.C1 = tool.Grip:Inverse()
+			end
+		end
+	end
+	SelectedTools = {} 
+	RefreshList()
+end)
+
+-- LỆNH 2: NHẤN USE ĐỂ RA CHIÊU / ĐÁNH VẬT PHẨM ĐANG CẦM (Đã nâng cấp để đánh mượt)
+UseBtn.MouseButton1Click:Connect(function()
+	local Char = Player.Character
+	if not Char then return end
+	
+	-- Quét tất cả vật phẩm đang gắn trên nhân vật và kích hoạt chiêu thức
+	for _, tool in pairs(Char:GetChildren()) do
+		if tool:IsA("Tool") then
+			task.spawn(function()
+				tool:Activate() -- Lệnh này tương đương với click chuột trái để xả chiêu/đánh
+				task.wait(0.1) -- Đợi 0.1 giây
+				tool:Deactivate() -- Nhả chuột ra để vũ khí không bị kẹt, giúp lần bấm USE tiếp theo vẫn đánh được
+			end)
+		end
+	end
+end)
+
+Backpack.ChildAdded:Connect(RefreshList)
+Backpack.ChildRemoved:Connect(RefreshList)
+
+Player.CharacterAdded:Connect(function()
+	Backpack = Player:WaitForChild("Backpack")
+	SelectedTools = {}
+	Backpack.ChildAdded:Connect(RefreshList)
+	Backpack.ChildRemoved:Connect(RefreshList)
+	RefreshList()
+end)
+
+RefreshList()
