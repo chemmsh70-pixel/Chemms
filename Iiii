@@ -1,0 +1,136 @@
+-- Cài đặt mặc định
+_G.HeadSize = 20
+_G.HitboxStatus = false
+
+-- 1. TẠO MENU (UI) CÓ THÊM Ô NHẬP SIZE
+local CoreGui = game:GetService("CoreGui")
+if CoreGui:FindFirstChild("NPC_Hitbox_Menu") then
+    CoreGui.NPC_Hitbox_Menu:Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "NPC_Hitbox_Menu"
+ScreenGui.Parent = CoreGui
+
+-- Khung chính (Kéo dài thêm 1 chút để chứa ô nhập số)
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 200, 0, 130) 
+MainFrame.Position = UDim2.new(0.5, -100, 0.2, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+-- Tiêu đề
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0.3, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "🎯 NPC Hitbox Menu"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16
+Title.Parent = MainFrame
+
+-- Ô NHẬP SỐ HITBOX (MỚI)
+local SizeInput = Instance.new("TextBox")
+SizeInput.Size = UDim2.new(0.8, 0, 0.25, 0)
+SizeInput.Position = UDim2.new(0.1, 0, 0.35, 0)
+SizeInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+SizeInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+SizeInput.PlaceholderText = "Nhập Size (Đang: 20)"
+SizeInput.Text = "20"
+SizeInput.Font = Enum.Font.Gotham
+SizeInput.TextSize = 14
+SizeInput.Parent = MainFrame
+
+local InputCorner = Instance.new("UICorner")
+InputCorner.CornerRadius = UDim.new(0, 4)
+InputCorner.Parent = SizeInput
+
+-- Nút Bật/Tắt
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(0.8, 0, 0.25, 0)
+ToggleBtn.Position = UDim2.new(0.1, 0, 0.65, 0)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(255, 75, 75)
+ToggleBtn.Text = "Đang: TẮT"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.TextSize = 14
+ToggleBtn.Parent = MainFrame
+
+local BtnCorner = Instance.new("UICorner")
+BtnCorner.CornerRadius = UDim.new(0, 6)
+BtnCorner.Parent = ToggleBtn
+
+---
+
+-- 2. XỬ LÝ LOGIC UI
+
+-- Cập nhật kích thước khi ông nhập số mới
+SizeInput.FocusLost:Connect(function()
+    local newSize = tonumber(SizeInput.Text)
+    if newSize then -- Nếu nhập đúng là số
+        _G.HeadSize = newSize
+    else -- Nếu nhập bậy (chữ) thì trả về số hiện tại
+        SizeInput.Text = tostring(_G.HeadSize)
+    end
+end)
+
+-- Khôi phục kích thước đầu khi TẮT
+local function RevertHitbox()
+    for _, v in pairs(game:GetService("Workspace"):GetDescendants()) do
+        if v:IsA("Model") and v:FindFirstChild("Humanoid") and v:FindFirstChild("Head") then
+            if not game:GetService("Players"):GetPlayerFromCharacter(v) then
+                pcall(function()
+                    v.Head.Size = Vector3.new(1.2, 1, 1) -- Đưa về size nhỏ gọn của game
+                    v.Head.Transparency = 0 -- Cho hiện lại đầu bình thường
+                    v.Head.CanCollide = true
+                    v.Head.Massless = false
+                end)
+            end
+        end
+    end
+end
+
+-- Bấm nút BẬT/TẮT
+ToggleBtn.MouseButton1Click:Connect(function()
+    _G.HitboxStatus = not _G.HitboxStatus
+    if _G.HitboxStatus then
+        ToggleBtn.Text = "Đang: BẬT"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(75, 255, 75)
+    else
+        ToggleBtn.Text = "Đang: TẮT"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(255, 75, 75)
+        RevertHitbox() 
+    end
+end)
+
+---
+
+-- 3. VÒNG LẶP PHÓNG TO HITBOX CỦA NPC
+task.spawn(function()
+    while task.wait(0.5) do
+        if _G.HitboxStatus then
+            for _, v in pairs(game:GetService("Workspace"):GetDescendants()) do
+                if v:IsA("Model") and v:FindFirstChild("Humanoid") and v:FindFirstChild("Head") and v.Humanoid.Health > 0 then
+                    -- Lọc lấy NPC
+                    if not game:GetService("Players"):GetPlayerFromCharacter(v) then
+                        pcall(function()
+                            v.Head.Size = Vector3.new(_G.HeadSize, _G.HeadSize, _G.HeadSize)
+                            
+                            -- CHỈNH TÀNG HÌNH ĐỂ GIẢM LAG (Không render màu/vật liệu nữa)
+                            v.Head.Transparency = 1 
+                            
+                            v.Head.CanCollide = false
+                            v.Head.Massless = true
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end)
