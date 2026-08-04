@@ -1,0 +1,786 @@
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+
+local Player = Players.LocalPlayer
+local guiName = "AnimCutStudioV9_Fixed"
+
+if CoreGui:FindFirstChild(guiName) then
+    CoreGui[guiName]:Destroy()
+end
+
+-- === DỮ LIỆU DỰ ÁN === --
+local Sequence = {}
+local currentId = ""
+local currentTrack = nil
+local originalMaxTime = 0
+local startTime = 0
+local endTime = 0
+local playheadTime = 0
+
+-- Tốc độ
+local currentSpeedMode = "Fixed"
+local baseSpeed = 1.0
+
+-- Đồ thị (Keyframes)
+local SpeedCurve = {
+    {t = 0.0, s = 1.0},
+    {t = 1.0, s = 1.0}
+}
+local selectedPointIndex = 1
+local isReversed = false
+local isPlaying = false
+
+-- Quản lý Chuỗi
+local sequencePlaying = false
+local currentSeqIndex = 1
+
+-- === HÀM TÍNH TOÁN THỜI LƯỢNG ĐỒ THỊ (TÍCH PHÂN LOGARIT) === --
+local function calculateCurveDuration()
+    local baseDur = endTime - startTime
+    if baseDur <= 0 then return 0 end
+    if currentSpeedMode == "Fixed" then return baseDur / baseSpeed end
+    
+    local totalTime = 0
+    for i = 1, #SpeedCurve - 1 do
+        local p1, p2 = SpeedCurve[i], SpeedCurve[i+1]
+        local dt = (p2.t - p1.t) * baseDur
+        local s1, s2 = p1.s, p2.s
+        
+        if math.abs(s1 - s2) < 0.01 then
+            totalTime = totalTime + (dt / s1)
+        else
+            totalTime = totalTime + (dt / (s2 - s1)) * math.log(s2 / s1)
+        end
+    end
+    return totalTime
+end
+
+-- === 1. TẠO GIAO DIỆN === --
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = guiName
+ScreenGui.Parent = CoreGui
+ScreenGui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 350, 0, 520)
+MainFrame.Position = UDim2.new(0.5, -175, 0.5, -260)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+Instance.new("UIStroke", MainFrame).Color = Color3.fromRGB(100, 100, 100)
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.BackgroundTransparency = 1
+Title.Text = "🎬 ANIMCUT V9.1 - FIXED PRO"
+Title.TextColor3 = Color3.fromRGB(255, 215, 0)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16
+Title.Parent = MainFrame
+
+-- ID & TẢI
+local IDInput = Instance.new("TextBox")
+IDInput.Size = UDim2.new(0.65, 0, 0, 30)
+IDInput.Position = UDim2.new(0.05, 0, 0, 35)
+IDInput.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+IDInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+IDInput.PlaceholderText = "Nhập ID Emote..."
+IDInput.Font = Enum.Font.Gotham
+IDInput.TextSize = 13
+IDInput.Text = ""
+IDInput.ClearTextOnFocus = false
+IDInput.Parent = MainFrame
+Instance.new("UICorner", IDInput).CornerRadius = UDim.new(0, 6)
+
+local LoadBtn = Instance.new("TextButton")
+LoadBtn.Size = UDim2.new(0.23, 0, 0, 30)
+LoadBtn.Position = UDim2.new(0.72, 0, 0, 35)
+LoadBtn.BackgroundColor3 = Color3.fromRGB(100, 50, 200)
+LoadBtn.Text = "TẢI"
+LoadBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+LoadBtn.Font = Enum.Font.GothamBold
+LoadBtn.Parent = MainFrame
+Instance.new("UICorner", LoadBtn).CornerRadius = UDim.new(0, 6)
+
+-- THÔNG TIN THỜI LƯỢNG
+local DurationInfo = Instance.new("TextLabel")
+DurationInfo.Size = UDim2.new(0.9, 0, 0, 20)
+DurationInfo.Position = UDim2.new(0.05, 0, 0, 70)
+DurationInfo.BackgroundTransparency = 1
+DurationInfo.Text = "Thời lượng: 0.0s ➔ 0.0s"
+DurationInfo.TextColor3 = Color3.fromRGB(180, 180, 180)
+DurationInfo.Font = Enum.Font.GothamMedium
+DurationInfo.TextSize = 12
+DurationInfo.TextXAlignment = Enum.TextXAlignment.Left
+DurationInfo.Parent = MainFrame
+
+-- TIMELINE CẮT GHÉP
+local TimeLabel = Instance.new("TextLabel")
+TimeLabel.Size = UDim2.new(0.9, 0, 0, 15)
+TimeLabel.Position = UDim2.new(0.05, 0, 0, 95)
+TimeLabel.BackgroundTransparency = 1
+TimeLabel.Text = "Vị trí: 0.00s / 0.00s"
+TimeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TimeLabel.Font = Enum.Font.GothamBold
+TimeLabel.TextSize = 13
+TimeLabel.TextXAlignment = Enum.TextXAlignment.Center
+TimeLabel.Parent = MainFrame
+
+local TimeBar = Instance.new("Frame")
+TimeBar.Size = UDim2.new(0.9, 0, 0, 12)
+TimeBar.Position = UDim2.new(0.05, 0, 0, 115)
+TimeBar.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+TimeBar.Parent = MainFrame
+Instance.new("UICorner", TimeBar).CornerRadius = UDim.new(1, 0)
+local TimeKnob = Instance.new("TextButton")
+TimeKnob.Size = UDim2.new(0, 16, 0, 20)
+TimeKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+TimeKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+TimeKnob.Text = ""
+TimeKnob.Parent = TimeBar
+Instance.new("UICorner", TimeKnob).CornerRadius = UDim.new(0, 4)
+
+-- NÚT CẮT
+local CutStartBtn = Instance.new("TextButton")
+CutStartBtn.Size = UDim2.new(0.42, 0, 0, 25)
+CutStartBtn.Position = UDim2.new(0.05, 0, 0, 135)
+CutStartBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+CutStartBtn.Text = "✂️ XÓA PHẦN TRƯỚC"
+CutStartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CutStartBtn.Font = Enum.Font.GothamBold
+CutStartBtn.TextSize = 11
+CutStartBtn.Parent = MainFrame
+Instance.new("UICorner", CutStartBtn).CornerRadius = UDim.new(0, 6)
+
+local CutEndBtn = Instance.new("TextButton")
+CutEndBtn.Size = UDim2.new(0.42, 0, 0, 25)
+CutEndBtn.Position = UDim2.new(0.53, 0, 0, 135)
+CutEndBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+CutEndBtn.Text = "✂️ XÓA PHẦN SAU"
+CutEndBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CutEndBtn.Font = Enum.Font.GothamBold
+CutEndBtn.TextSize = 11
+CutEndBtn.Parent = MainFrame
+Instance.new("UICorner", CutEndBtn).CornerRadius = UDim.new(0, 6)
+
+local ResetCutBtn = Instance.new("TextButton")
+ResetCutBtn.Size = UDim2.new(0.9, 0, 0, 20)
+ResetCutBtn.Position = UDim2.new(0.05, 0, 0, 165)
+ResetCutBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+ResetCutBtn.Text = "Khôi phục thời lượng gốc"
+ResetCutBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+ResetCutBtn.Font = Enum.Font.GothamMedium
+ResetCutBtn.TextSize = 11
+ResetCutBtn.Parent = MainFrame
+Instance.new("UICorner", ResetCutBtn).CornerRadius = UDim.new(0, 4)
+
+-- CÔNG TẮC ĐỔI CHẾ ĐỘ
+local ToggleSpeedBtn = Instance.new("TextButton")
+ToggleSpeedBtn.Size = UDim2.new(0.9, 0, 0, 25)
+ToggleSpeedBtn.Position = UDim2.new(0.05, 0, 0, 195)
+ToggleSpeedBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 150)
+ToggleSpeedBtn.Text = "🔄 CHUYỂN QUA: ĐỒ THỊ UỐN CONG"
+ToggleSpeedBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleSpeedBtn.Font = Enum.Font.GothamBold
+ToggleSpeedBtn.TextSize = 11
+ToggleSpeedBtn.Parent = MainFrame
+Instance.new("UICorner", ToggleSpeedBtn).CornerRadius = UDim.new(0, 4)
+
+-- KHU VỰC 1: TỐC ĐỘ FIXED
+local FixedContainer = Instance.new("Frame")
+FixedContainer.Size = UDim2.new(0.9, 0, 0, 40)
+FixedContainer.Position = UDim2.new(0.05, 0, 0, 225)
+FixedContainer.BackgroundTransparency = 1
+FixedContainer.Parent = MainFrame
+
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(1, 0, 0, 15)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "Tốc độ: 1.0x"
+SpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+SpeedLabel.Font = Enum.Font.GothamBold
+SpeedLabel.TextSize = 12
+SpeedLabel.TextXAlignment = Enum.TextXAlignment.Center
+SpeedLabel.Parent = FixedContainer
+
+local SpeedBar = Instance.new("Frame")
+SpeedBar.Size = UDim2.new(1, 0, 0, 8)
+SpeedBar.Position = UDim2.new(0, 0, 0, 20)
+SpeedBar.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+SpeedBar.Parent = FixedContainer
+Instance.new("UICorner", SpeedBar).CornerRadius = UDim.new(1, 0)
+local SpeedFill = Instance.new("Frame")
+SpeedFill.Size = UDim2.new(0.1, 0, 1, 0)
+SpeedFill.BackgroundColor3 = Color3.fromRGB(255, 150, 0)
+SpeedFill.Parent = SpeedBar
+Instance.new("UICorner", SpeedFill).CornerRadius = UDim.new(1, 0)
+local SpeedKnob = Instance.new("TextButton")
+SpeedKnob.Size = UDim2.new(0, 16, 0, 16)
+SpeedKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+SpeedKnob.Position = UDim2.new(1, 0, 0.5, 0)
+SpeedKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+SpeedKnob.Text = ""
+SpeedKnob.Parent = SpeedFill
+Instance.new("UICorner", SpeedKnob).CornerRadius = UDim.new(1, 0)
+
+-- KHU VỰC 2: BẢNG ĐỒ THỊ
+local CurveContainer = Instance.new("Frame")
+CurveContainer.Size = UDim2.new(0.9, 0, 0, 140)
+CurveContainer.Position = UDim2.new(0.05, 0, 0, 225)
+CurveContainer.BackgroundTransparency = 1
+CurveContainer.Visible = false
+CurveContainer.Parent = MainFrame
+
+local CurveBoard = Instance.new("Frame")
+CurveBoard.Size = UDim2.new(1, 0, 0, 100)
+CurveBoard.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+CurveBoard.ClipsDescendants = true
+CurveBoard.Parent = CurveContainer
+Instance.new("UICorner", CurveBoard).CornerRadius = UDim.new(0, 6)
+Instance.new("UIStroke", CurveBoard).Color = Color3.fromRGB(80, 80, 80)
+local LineMid = Instance.new("Frame")
+LineMid.Size = UDim2.new(1, 0, 0, 1)
+LineMid.Position = UDim2.new(0, 0, 0.5, 0)
+LineMid.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
+LineMid.BorderSizePixel = 0
+LineMid.Parent = CurveBoard
+
+local DragSpeedInfo = Instance.new("TextLabel")
+DragSpeedInfo.Size = UDim2.new(0, 80, 0, 20)
+DragSpeedInfo.Position = UDim2.new(0.5, -40, 0, 5)
+DragSpeedInfo.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+DragSpeedInfo.BackgroundTransparency = 0.5
+DragSpeedInfo.Text = "1.0x"
+DragSpeedInfo.TextColor3 = Color3.fromRGB(255, 255, 255)
+DragSpeedInfo.Font = Enum.Font.GothamBold
+DragSpeedInfo.TextSize = 12
+DragSpeedInfo.Visible = false
+DragSpeedInfo.Parent = CurveBoard
+Instance.new("UICorner", DragSpeedInfo).CornerRadius = UDim.new(0, 4)
+
+local AddBeatBtn = Instance.new("TextButton")
+AddBeatBtn.Size = UDim2.new(0.48, 0, 0, 25)
+AddBeatBtn.Position = UDim2.new(0, 0, 0, 110)
+AddBeatBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+AddBeatBtn.Text = "➕ THÊM NHỊP"
+AddBeatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AddBeatBtn.Font = Enum.Font.GothamBold
+AddBeatBtn.TextSize = 11
+AddBeatBtn.Parent = CurveContainer
+Instance.new("UICorner", AddBeatBtn).CornerRadius = UDim.new(0, 4)
+
+local DelBeatBtn = Instance.new("TextButton")
+DelBeatBtn.Size = UDim2.new(0.48, 0, 0, 25)
+DelBeatBtn.Position = UDim2.new(0.52, 0, 0, 110)
+DelBeatBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+DelBeatBtn.Text = "➖ XÓA NHỊP"
+DelBeatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+DelBeatBtn.Font = Enum.Font.GothamBold
+DelBeatBtn.TextSize = 11
+DelBeatBtn.Parent = CurveContainer
+Instance.new("UICorner", DelBeatBtn).CornerRadius = UDim.new(0, 4)
+
+-- KHU VỰC 3: CÁC NÚT ĐIỀU KHIỂN & LƯU CHUỖI
+local LowerFrame = Instance.new("Frame")
+LowerFrame.Size = UDim2.new(0.9, 0, 0, 220)
+LowerFrame.Position = UDim2.new(0.05, 0, 0, 275)
+LowerFrame.BackgroundTransparency = 1
+LowerFrame.Parent = MainFrame
+
+local PlayPauseBtn = Instance.new("TextButton")
+PlayPauseBtn.Size = UDim2.new(0.48, 0, 0, 30)
+PlayPauseBtn.Position = UDim2.new(0, 0, 0, 0)
+PlayPauseBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+PlayPauseBtn.Text = "▶️ PLAY"
+PlayPauseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+PlayPauseBtn.Font = Enum.Font.GothamBold
+PlayPauseBtn.Parent = LowerFrame
+Instance.new("UICorner", PlayPauseBtn).CornerRadius = UDim.new(0, 6)
+
+local ReverseBtn = Instance.new("TextButton")
+ReverseBtn.Size = UDim2.new(0.48, 0, 0, 30)
+ReverseBtn.Position = UDim2.new(0.52, 0, 0, 0)
+ReverseBtn.BackgroundColor3 = Color3.fromRGB(150, 50, 150)
+ReverseBtn.Text = "⏪ TUA NGƯỢC: OFF"
+ReverseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ReverseBtn.Font = Enum.Font.GothamBold
+ReverseBtn.TextSize = 11
+ReverseBtn.Parent = LowerFrame
+Instance.new("UICorner", ReverseBtn).CornerRadius = UDim.new(0, 6)
+
+local StopAllBtn = Instance.new("TextButton")
+StopAllBtn.Size = UDim2.new(1, 0, 0, 25)
+StopAllBtn.Position = UDim2.new(0, 0, 0, 35)
+StopAllBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+StopAllBtn.Text = "⏹️ DỪNG TẤT CẢ (VỀ BÌNH THƯỜNG)"
+StopAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+StopAllBtn.Font = Enum.Font.GothamBold
+StopAllBtn.TextSize = 11
+StopAllBtn.Parent = LowerFrame
+Instance.new("UICorner", StopAllBtn).CornerRadius = UDim.new(0, 6)
+
+local AddSeqBtn = Instance.new("TextButton")
+AddSeqBtn.Size = UDim2.new(0.48, 0, 0, 25)
+AddSeqBtn.Position = UDim2.new(0, 0, 0, 65)
+AddSeqBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 255)
+AddSeqBtn.Text = "➕ THÊM VÀO CHUỖI"
+AddSeqBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AddSeqBtn.Font = Enum.Font.GothamBold
+AddSeqBtn.TextSize = 11
+AddSeqBtn.Parent = LowerFrame
+Instance.new("UICorner", AddSeqBtn).CornerRadius = UDim.new(0, 4)
+
+local DelLastSeqBtn = Instance.new("TextButton")
+DelLastSeqBtn.Size = UDim2.new(0.48, 0, 0, 25)
+DelLastSeqBtn.Position = UDim2.new(0.52, 0, 0, 65)
+DelLastSeqBtn.BackgroundColor3 = Color3.fromRGB(220, 120, 0)
+DelLastSeqBtn.Text = "⮌ XÓA ĐOẠN CUỐI"
+DelLastSeqBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+DelLastSeqBtn.Font = Enum.Font.GothamBold
+DelLastSeqBtn.TextSize = 11
+DelLastSeqBtn.Parent = LowerFrame
+Instance.new("UICorner", DelLastSeqBtn).CornerRadius = UDim.new(0, 4)
+
+local PlaySeqBtn = Instance.new("TextButton")
+PlaySeqBtn.Size = UDim2.new(0.48, 0, 0, 25)
+PlaySeqBtn.Position = UDim2.new(0, 0, 0, 95)
+PlaySeqBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 100)
+PlaySeqBtn.Text = "🎬 CHẠY TOÀN BỘ"
+PlaySeqBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+PlaySeqBtn.Font = Enum.Font.GothamBold
+PlaySeqBtn.TextSize = 11
+PlaySeqBtn.Parent = LowerFrame
+Instance.new("UICorner", PlaySeqBtn).CornerRadius = UDim.new(0, 4)
+
+local ClearSeqBtn = Instance.new("TextButton")
+ClearSeqBtn.Size = UDim2.new(0.48, 0, 0, 25)
+ClearSeqBtn.Position = UDim2.new(0.52, 0, 0, 95)
+ClearSeqBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+ClearSeqBtn.Text = "🗑️ XÓA CHUỖI"
+ClearSeqBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ClearSeqBtn.Font = Enum.Font.GothamBold
+ClearSeqBtn.TextSize = 11
+ClearSeqBtn.Parent = LowerFrame
+Instance.new("UICorner", ClearSeqBtn).CornerRadius = UDim.new(0, 4)
+
+local SaveLoadBox = Instance.new("TextBox")
+SaveLoadBox.Size = UDim2.new(1, 0, 0, 25)
+SaveLoadBox.Position = UDim2.new(0, 0, 0, 125)
+SaveLoadBox.BackgroundColor3 = Color3.fromRGB(25, 40, 30)
+SaveLoadBox.TextColor3 = Color3.fromRGB(150, 255, 150)
+SaveLoadBox.PlaceholderText = "Dán Code vào đây để Load..."
+SaveLoadBox.Font = Enum.Font.Gotham
+SaveLoadBox.TextSize = 11
+SaveLoadBox.Text = ""
+SaveLoadBox.ClearTextOnFocus = false
+SaveLoadBox.ClipsDescendants = true
+SaveLoadBox.Parent = LowerFrame
+Instance.new("UICorner", SaveLoadBox).CornerRadius = UDim.new(0, 4)
+Instance.new("UIStroke", SaveLoadBox).Color = Color3.fromRGB(50, 100, 50)
+
+local ExportCodeBtn = Instance.new("TextButton")
+ExportCodeBtn.Size = UDim2.new(0.48, 0, 0, 25)
+ExportCodeBtn.Position = UDim2.new(0, 0, 0, 155)
+ExportCodeBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 50)
+ExportCodeBtn.Text = "💾 TẠO CODE LƯU"
+ExportCodeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ExportCodeBtn.Font = Enum.Font.GothamBold
+ExportCodeBtn.TextSize = 11
+ExportCodeBtn.Parent = LowerFrame
+Instance.new("UICorner", ExportCodeBtn).CornerRadius = UDim.new(0, 4)
+
+local ImportCodeBtn = Instance.new("TextButton")
+ImportCodeBtn.Size = UDim2.new(0.48, 0, 0, 25)
+ImportCodeBtn.Position = UDim2.new(0.52, 0, 0, 155)
+ImportCodeBtn.BackgroundColor3 = Color3.fromRGB(150, 150, 0)
+ImportCodeBtn.Text = "📁 LOAD TỪ CODE"
+ImportCodeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ImportCodeBtn.Font = Enum.Font.GothamBold
+ImportCodeBtn.TextSize = 11
+ImportCodeBtn.Parent = LowerFrame
+Instance.new("UICorner", ImportCodeBtn).CornerRadius = UDim.new(0, 4)
+
+local CloseMenuBtn = Instance.new("TextButton")
+CloseMenuBtn.Size = UDim2.new(1, 0, 0, 25)
+CloseMenuBtn.Position = UDim2.new(0, 0, 0, 190)
+CloseMenuBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+CloseMenuBtn.Text = "❌ ĐÓNG MENU"
+CloseMenuBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
+CloseMenuBtn.Font = Enum.Font.GothamBold
+CloseMenuBtn.TextSize = 11
+CloseMenuBtn.Parent = LowerFrame
+Instance.new("UICorner", CloseMenuBtn).CornerRadius = UDim.new(0, 4)
+
+-- === HỆ THỐNG LOGIC === --
+
+local function updateDurationUI()
+    local baseDur = endTime - startTime
+    local finalDur = calculateCurveDuration()
+    DurationInfo.Text = string.format("Thời lượng: %.2fs ➔ %.2fs", baseDur, finalDur)
+end
+
+local function updateTimelineUI()
+    local clipLength = endTime - startTime
+    if clipLength <= 0 then return end
+    local relativePos = playheadTime - startTime
+    local percent = math.clamp(relativePos / clipLength, 0, 1)
+    
+    TimeKnob.Position = UDim2.new(percent, 0, 0.5, 0)
+    TimeLabel.Text = string.format("Vị trí: %.2fs / %.2fs", relativePos, clipLength)
+end
+
+ToggleSpeedBtn.MouseButton1Click:Connect(function()
+    if currentSpeedMode == "Fixed" then
+        currentSpeedMode = "Curve"
+        ToggleSpeedBtn.Text = "🔄 CHUYỂN QUA: TỐC ĐỘ BÌNH THƯỜNG"
+        ToggleSpeedBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 50)
+        FixedContainer.Visible = false
+        CurveContainer.Visible = true
+        LowerFrame.Position = UDim2.new(0.05, 0, 0, 370)
+        MainFrame.Size = UDim2.new(0, 350, 0, 615)
+    else
+        currentSpeedMode = "Fixed"
+        ToggleSpeedBtn.Text = "🔄 CHUYỂN QUA: ĐỒ THỊ UỐN CONG"
+        ToggleSpeedBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 150)
+        FixedContainer.Visible = true
+        CurveContainer.Visible = false
+        LowerFrame.Position = UDim2.new(0.05, 0, 0, 275)
+        MainFrame.Size = UDim2.new(0, 350, 0, 520)
+    end
+    updateDurationUI()
+end)
+
+-- TOÁN HỌC ĐỒ THỊ
+local function speedToY(s)
+    if s >= 1 then return 0.5 - ((s - 1) / 9.0) * 0.5
+    else return 1.0 - ((s - 0.1) / 0.9) * 0.5 end
+end
+
+local function yToSpeed(y)
+    y = math.clamp(y, 0.05, 0.95)
+    if y <= 0.5 then return 1 + ((0.5 - y) / 0.5) * 9.0
+    else return 0.1 + ((1.0 - y) / 0.5) * 0.9 end
+end
+
+local curveLines, curveNodes = {}, {}
+local isDraggingNode, activeNodeIndex = false, 0
+local draggingFixedSpeed = false
+local draggingTime = false
+
+local function sortCurve() table.sort(SpeedCurve, function(a, b) return a.t < b.t end) end
+
+local function renderCurve()
+    sortCurve()
+    for _, obj in pairs(curveLines) do obj:Destroy() end
+    for _, obj in pairs(curveNodes) do obj:Destroy() end
+    curveLines, curveNodes = {}, {}
+
+    local width, height = CurveBoard.AbsoluteSize.X, CurveBoard.AbsoluteSize.Y
+    if width == 0 then return end
+
+    for i = 1, #SpeedCurve - 1 do
+        local p1, p2 = SpeedCurve[i], SpeedCurve[i+1]
+        local x1, y1 = p1.t * width, speedToY(p1.s) * height
+        local x2, y2 = p2.t * width, speedToY(p2.s) * height
+        
+        local line = Instance.new("Frame")
+        line.BackgroundColor3 = Color3.fromRGB(255, 215, 0)
+        line.BorderSizePixel = 0
+        line.AnchorPoint = Vector2.new(0.5, 0.5)
+        local length = math.sqrt((x2-x1)^2 + (y2-y1)^2)
+        local angle = math.deg(math.atan2(y2-y1, x2-x1))
+        
+        line.Size = UDim2.new(0, length, 0, 2)
+        line.Position = UDim2.new(0, (x1+x2)/2, 0, (y1+y2)/2)
+        line.Rotation = angle
+        line.Parent = CurveBoard
+        table.insert(curveLines, line)
+    end
+
+    for i, p in ipairs(SpeedCurve) do
+        local node = Instance.new("TextButton")
+        node.Size = UDim2.new(0, 16, 0, 16)
+        node.AnchorPoint = Vector2.new(0.5, 0.5)
+        node.Position = UDim2.new(p.t, 0, speedToY(p.s), 0)
+        node.BackgroundColor3 = (i == selectedPointIndex) and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 255, 255)
+        if i == selectedPointIndex then node.Size = UDim2.new(0, 20, 0, 20) end
+        node.Text = ""
+        Instance.new("UICorner", node).CornerRadius = UDim.new(1, 0)
+        node.Parent = CurveBoard
+        
+        node.InputBegan:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+                isDraggingNode = true
+                activeNodeIndex = i
+                selectedPointIndex = i
+                DragSpeedInfo.Visible = true
+                DragSpeedInfo.Text = string.format("Tốc độ: %.1fx", p.s)
+                renderCurve()
+            end
+        end)
+        table.insert(curveNodes, node)
+    end
+end
+
+-- Kéo thả Time / Speed
+TimeKnob.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then 
+        draggingTime = true; if currentTrack then currentTrack:AdjustSpeed(0) end 
+    end
+end)
+SpeedKnob.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then draggingFixedSpeed = true end
+end)
+
+UserInputService.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+        isDraggingNode, draggingTime, draggingFixedSpeed = false, false, false
+        DragSpeedInfo.Visible = false
+        updateDurationUI()
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(inp)
+    if draggingTime and originalMaxTime > 0 then
+        local percent = math.clamp((inp.Position.X - TimeBar.AbsolutePosition.X) / TimeBar.AbsoluteSize.X, 0, 1)
+        playheadTime = startTime + (percent * (endTime - startTime))
+        updateTimelineUI()
+        if currentTrack then currentTrack.TimePosition = playheadTime end
+    elseif draggingFixedSpeed then
+        local percent = math.clamp((inp.Position.X - SpeedBar.AbsolutePosition.X) / SpeedBar.AbsoluteSize.X, 0, 1)
+        SpeedFill.Size = UDim2.new(percent, 0, 1, 0)
+        baseSpeed = 0.1 + (percent * 9.9)
+        SpeedLabel.Text = string.format("Tốc độ: %.1fx", baseSpeed)
+        updateDurationUI()
+    elseif isDraggingNode and activeNodeIndex > 0 then
+        local localX = (inp.Position.X - CurveBoard.AbsolutePosition.X) / CurveBoard.AbsoluteSize.X
+        local localY = (inp.Position.Y - CurveBoard.AbsolutePosition.Y) / CurveBoard.AbsoluteSize.Y
+        local currentSpd = yToSpeed(localY)
+        SpeedCurve[activeNodeIndex].s = currentSpd
+        DragSpeedInfo.Text = string.format("Tốc độ: %.1fx", currentSpd)
+        if activeNodeIndex > 1 and activeNodeIndex < #SpeedCurve then
+            SpeedCurve[activeNodeIndex].t = math.clamp(localX, SpeedCurve[activeNodeIndex-1].t + 0.05, SpeedCurve[activeNodeIndex+1].t - 0.05)
+        end
+        renderCurve()
+    end
+end)
+
+local function calculateLiveSpeed(relativeTime)
+    for i = 1, #SpeedCurve - 1 do
+        local p1, p2 = SpeedCurve[i], SpeedCurve[i+1]
+        if relativeTime >= p1.t and relativeTime <= p2.t then
+            local range = p2.t - p1.t
+            if range <= 0 then return p1.s end
+            return p1.s + (p2.s - p1.s) * ((relativeTime - p1.t) / range)
+        end
+    end
+    return 1.0
+end
+
+-- CẮT TIMELINE
+CutStartBtn.MouseButton1Click:Connect(function()
+    startTime = playheadTime; if startTime >= endTime then endTime = originalMaxTime end
+    updateTimelineUI(); updateDurationUI()
+end)
+CutEndBtn.MouseButton1Click:Connect(function()
+    endTime = playheadTime; if endTime <= startTime then startTime = 0 end
+    updateTimelineUI(); updateDurationUI()
+end)
+ResetCutBtn.MouseButton1Click:Connect(function()
+    startTime = 0; endTime = originalMaxTime; playheadTime = 0
+    updateTimelineUI(); updateDurationUI()
+end)
+AddBeatBtn.MouseButton1Click:Connect(function()
+    if #SpeedCurve >= 10 then return end
+    table.insert(SpeedCurve, {t = 0.5, s = 1.0})
+    renderCurve(); updateDurationUI()
+end)
+DelBeatBtn.MouseButton1Click:Connect(function()
+    if #SpeedCurve > 2 and selectedPointIndex > 1 and selectedPointIndex < #SpeedCurve then
+        table.remove(SpeedCurve, selectedPointIndex)
+        selectedPointIndex = 1
+        renderCurve(); updateDurationUI()
+    end
+end)
+
+-- LOGIC KẾT NỐI CHUỖI & XUẤT CODE ĐÃ FIX
+local function playNextInSequence()
+    if currentSeqIndex > #Sequence then
+        sequencePlaying = false
+        StopAllBtn.Text = "⏹️ DỪNG TẤT CẢ (VỀ BÌNH THƯỜNG)"
+        PlaySeqBtn.Text = "🎬 CHẠY TOÀN BỘ"
+        -- [FIX LỖI KẸT ANIMATION Ở ĐÂY]: Dừng hẳn track lại khi đã hết chuỗi
+        if currentTrack then 
+            currentTrack:Stop() 
+        end
+        return
+    end
+    
+    local clip = Sequence[currentSeqIndex]
+    local anim = Instance.new("Animation"); anim.AnimationId = "rbxassetid://" .. clip.id
+    if currentTrack then currentTrack:Stop() end
+    local char = Player.Character; local animator = char and char:FindFirstChild("Humanoid") and char.Humanoid:FindFirstChild("Animator")
+    currentTrack = animator:LoadAnimation(anim)
+    currentTrack.Looped = false -- [FIX LỖI AUTO-LOOP Ở ĐÂY]: Ngăn Roblox tự động lặp lại
+    currentTrack:Play(); currentTrack:AdjustSpeed(0)
+    
+    task.spawn(function()
+        local timeout = 0; while currentTrack.Length <= 0 and timeout < 30 do task.wait(0.1); timeout = timeout + 1 end
+        originalMaxTime = currentTrack.Length
+        startTime = clip.startTime; endTime = clip.endTime
+        currentSpeedMode = clip.speedMode; baseSpeed = clip.baseSpeed
+        SpeedCurve = HttpService:JSONDecode(HttpService:JSONEncode(clip.SpeedCurve))
+        isReversed = clip.isReversed
+        playheadTime = isReversed and endTime or startTime
+        currentTrack.TimePosition = playheadTime
+        renderCurve(); updateTimelineUI(); updateDurationUI()
+    end)
+end
+
+RunService.Heartbeat:Connect(function()
+    if currentTrack and not draggingTime then
+        if isPlaying and not sequencePlaying then
+            playheadTime = currentTrack.TimePosition
+            if not isReversed and playheadTime >= endTime then currentTrack.TimePosition = startTime
+            elseif isReversed and playheadTime <= startTime then currentTrack.TimePosition = endTime end
+            updateTimelineUI()
+            local currentSpd = baseSpeed
+            if currentSpeedMode == "Curve" and endTime > startTime then
+                local relativeT = not isReversed and ((playheadTime - startTime) / (endTime - startTime)) or ((endTime - playheadTime) / (endTime - startTime))
+                currentSpd = calculateLiveSpeed(relativeT)
+            end
+            currentTrack:AdjustSpeed(currentSpd * (isReversed and -1 or 1))
+            
+        elseif sequencePlaying then
+            playheadTime = currentTrack.TimePosition
+            local isFinished = false
+            if not isReversed and playheadTime >= endTime then isFinished = true
+            elseif isReversed and playheadTime <= startTime then isFinished = true end
+            
+            if isFinished then
+                currentSeqIndex = currentSeqIndex + 1; playNextInSequence()
+            else
+                local currentSpd = baseSpeed
+                if currentSpeedMode == "Curve" and endTime > startTime then
+                    local relativeT = not isReversed and ((playheadTime - startTime) / (endTime - startTime)) or ((endTime - playheadTime) / (endTime - startTime))
+                    currentSpd = calculateLiveSpeed(relativeT)
+                end
+                currentTrack:AdjustSpeed(currentSpd * (isReversed and -1 or 1))
+                updateTimelineUI()
+            end
+        end
+    end
+end)
+
+LoadBtn.MouseButton1Click:Connect(function()
+    local id = string.match(IDInput.Text, "%d+")
+    if not id then return end
+    currentId = id
+    local char = Player.Character; local animator = char and char:FindFirstChild("Humanoid") and char.Humanoid:FindFirstChild("Animator")
+    if currentTrack then currentTrack:Stop() end
+    local anim = Instance.new("Animation"); anim.AnimationId = "rbxassetid://" .. id
+    currentTrack = animator:LoadAnimation(anim)
+    currentTrack.Looped = false -- [FIX AUTO-LOOP CHO CHẾ ĐỘ THƯỜNG]
+    currentTrack:Play(); currentTrack:AdjustSpeed(0)
+    
+    local timeout = 0; while currentTrack.Length <= 0 and timeout < 30 do task.wait(0.1); timeout = timeout + 1 end
+    if currentTrack.Length > 0 then
+        originalMaxTime = currentTrack.Length; startTime = 0; endTime = originalMaxTime; playheadTime = 0
+        SpeedCurve = {{t=0, s=1}, {t=1, s=1}}
+        isPlaying = false; PlayPauseBtn.Text = "▶️ PLAY"; PlayPauseBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        renderCurve(); updateTimelineUI(); updateDurationUI()
+    end
+end)
+
+PlayPauseBtn.MouseButton1Click:Connect(function()
+    if not currentTrack then return end
+    isPlaying = not isPlaying; sequencePlaying = false
+    if isPlaying then 
+        PlayPauseBtn.Text = "⏸️ PAUSE"; PlayPauseBtn.BackgroundColor3 = Color3.fromRGB(200, 150, 0)
+        if not isReversed and playheadTime >= endTime then currentTrack.TimePosition = startTime end
+    else 
+        PlayPauseBtn.Text = "▶️ PLAY"; PlayPauseBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        currentTrack:AdjustSpeed(0) 
+    end
+end)
+
+ReverseBtn.MouseButton1Click:Connect(function()
+    isReversed = not isReversed
+    ReverseBtn.Text = isReversed and "⏪ TUA NGƯỢC: ON" or "⏪ TUA NGƯỢC: OFF"
+end)
+
+StopAllBtn.MouseButton1Click:Connect(function()
+    isPlaying, sequencePlaying = false, false
+    local char = Player.Character
+    if char and char:FindFirstChild("Humanoid") then
+        local animator = char.Humanoid:FindFirstChild("Animator")
+        if animator then for _, track in pairs(animator:GetPlayingAnimationTracks()) do track:Stop() end end
+    end
+    PlayPauseBtn.Text = "▶️ PLAY"; PlayPauseBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+    StopAllBtn.Text = "⏹️ DỪNG TẤT CẢ (VỀ BÌNH THƯỜNG)"
+    PlaySeqBtn.Text = "🎬 CHẠY TOÀN BỘ"
+end)
+
+CloseMenuBtn.MouseButton1Click:Connect(function()
+    ScreenGui:Destroy()
+end)
+
+-- FIX LOGIC CHUỖI VÀ LƯU CODE
+AddSeqBtn.MouseButton1Click:Connect(function()
+    if currentId == "" then return end
+    table.insert(Sequence, {
+        id = currentId, startTime = startTime, endTime = endTime,
+        speedMode = currentSpeedMode, baseSpeed = baseSpeed,
+        SpeedCurve = HttpService:JSONDecode(HttpService:JSONEncode(SpeedCurve)),
+        isReversed = isReversed
+    })
+    AddSeqBtn.Text = "ĐÃ THÊM (" .. #Sequence .. ")"
+    task.delay(1, function() AddSeqBtn.Text = "➕ THÊM VÀO CHUỖI" end)
+end)
+
+DelLastSeqBtn.MouseButton1Click:Connect(function()
+    if #Sequence > 0 then table.remove(Sequence, #Sequence) end
+    DelLastSeqBtn.Text = "ĐÃ XÓA (" .. #Sequence .. ")"
+    task.delay(1, function() DelLastSeqBtn.Text = "⮌ XÓA ĐOẠN CUỐI" end)
+end)
+
+ClearSeqBtn.MouseButton1Click:Connect(function()
+    Sequence = {}
+    ClearSeqBtn.Text = "ĐÃ LÀM SẠCH!"
+    task.delay(1, function() ClearSeqBtn.Text = "🗑️ XÓA CHUỖI" end)
+end)
+
+PlaySeqBtn.MouseButton1Click:Connect(function()
+    if #Sequence == 0 then return end
+    sequencePlaying = true; isPlaying = false
+    PlayPauseBtn.Text = "▶️ PLAY"; PlayPauseBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+    StopAllBtn.Text = "🔴 ĐANG CHẠY CHUỖI..."
+    PlaySeqBtn.Text = "🔴 ĐANG XUẤT..."
+    currentSeqIndex = 1
+    playNextInSequence()
+end)
+
+ExportCodeBtn.MouseButton1Click:Connect(function()
+    if #Sequence == 0 then SaveLoadBox.Text = "Chuỗi trống, không có gì để lưu!"; return end
+    local success, encoded = pcall(function() return HttpService:JSONEncode(Sequence) end)
+    if success then SaveLoadBox.Text = encoded else SaveLoadBox.Text = "Lỗi khi tạo Code!" end
+end)
+
+ImportCodeBtn.MouseButton1Click:Connect(function()
+    local success, decoded = pcall(function() return HttpService:JSONDecode(SaveLoadBox.Text) end)
+    if success and type(decoded) == "table" then
+        Sequence = decoded
+        SaveLoadBox.Text = "Load thành công " .. #Sequence .. " đoạn!"
+    else
+        SaveLoadBox.Text = "Code không hợp lệ!"
+    end
+end)
+
+renderCurve()
