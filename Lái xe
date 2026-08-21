@@ -1,0 +1,772 @@
+--// MOBILE CAR CONTROLLER - SPEED + CIRCLE MENU + STEERING FIX
+--// StarterPlayer > StarterPlayerScripts > LocalScript
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+
+--==================================================
+-- SETTINGS
+--==================================================
+
+local minSpeed = 20
+local maxSpeedLimit = 500
+local currentSpeed = 100
+
+local acceleration = 5
+local reverseAcceleration = 4
+
+-- Tốc độ quẹo
+local turnPower = 2.8
+local minTurnPower = 0.8
+
+local editMode = false
+
+_G.CarForward = false
+_G.CarBackward = false
+_G.CarLeft = false
+_G.CarRight = false
+
+--==================================================
+-- GUI
+--==================================================
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "MobileCarController"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+
+gui.DisplayOrder = 999999
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+gui.Parent = player:WaitForChild("PlayerGui")
+
+--==================================================
+-- TẠO NÚT LÁI
+--==================================================
+
+local function createDriveButton(name, text, pos)
+
+	local button = Instance.new("TextButton")
+
+	button.Name = name
+	button.Text = text
+	button.Position = pos
+
+	button.Size = UDim2.new(0.11, 0, 0.12, 0)
+
+	button.BackgroundColor3 = Color3.fromRGB(30,30,30)
+	button.BackgroundTransparency = 0.15
+
+	button.TextColor3 = Color3.new(1,1,1)
+	button.TextScaled = true
+	button.Font = Enum.Font.GothamBold
+
+	button.AutoButtonColor = false
+	button.Active = true
+	button.Selectable = false
+
+	button.ZIndex = 100
+
+	button.Parent = gui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0,18)
+	corner.Parent = button
+
+	return button
+end
+
+local leftButton =
+	createDriveButton(
+		"LeftButton",
+		"←",
+		UDim2.new(0.05,0,0.72,0)
+	)
+
+local rightButton =
+	createDriveButton(
+		"RightButton",
+		"→",
+		UDim2.new(0.18,0,0.72,0)
+	)
+
+local forwardButton =
+	createDriveButton(
+		"ForwardButton",
+		"▲",
+		UDim2.new(0.80,0,0.61,0)
+	)
+
+local backwardButton =
+	createDriveButton(
+		"BackwardButton",
+		"▼",
+		UDim2.new(0.80,0,0.76,0)
+	)
+
+--==================================================
+-- MENU TRÒN 5%
+--==================================================
+
+local function createCircleMenu(name, text, pos)
+
+	local button = Instance.new("TextButton")
+
+	button.Name = name
+	button.Text = text
+
+	button.Size = UDim2.new(0.05,0,0.05,0)
+	button.Position = pos
+
+	button.AnchorPoint = Vector2.new(0.5,0.5)
+
+	button.BackgroundColor3 = Color3.fromRGB(30,30,30)
+	button.BackgroundTransparency = 0.08
+
+	button.TextColor3 = Color3.new(1,1,1)
+	button.TextScaled = true
+	button.Font = Enum.Font.GothamBold
+
+	button.AutoButtonColor = false
+	button.Active = true
+	button.Selectable = false
+
+	button.ZIndex = 500
+
+	button.Parent = gui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1,0)
+	corner.Parent = button
+
+	local aspect = Instance.new("UIAspectRatioConstraint")
+	aspect.AspectRatio = 1
+	aspect.Parent = button
+
+	return button
+end
+
+--==================================================
+-- MENU CHỈNH VỊ TRÍ
+--==================================================
+
+local editButton =
+	createCircleMenu(
+		"EditMenu",
+		"🔧",
+		UDim2.new(0.46,0,0.10,0)
+	)
+
+--==================================================
+-- MENU TỐC ĐỘ
+--==================================================
+
+local speedButton =
+	createCircleMenu(
+		"SpeedMenu",
+		"⚙",
+		UDim2.new(0.54,0,0.10,0)
+	)
+
+--==================================================
+-- SPEED PANEL
+--==================================================
+
+local speedPanel = Instance.new("Frame")
+
+speedPanel.Name = "SpeedPanel"
+
+speedPanel.Size = UDim2.new(0.60,0,0.26,0)
+speedPanel.Position = UDim2.new(0.20,0,0.37,0)
+
+speedPanel.BackgroundColor3 =
+	Color3.fromRGB(25,25,25)
+
+speedPanel.BackgroundTransparency = 0.03
+
+speedPanel.Visible = false
+speedPanel.Active = true
+speedPanel.ZIndex = 1000
+
+speedPanel.Parent = gui
+
+local panelCorner = Instance.new("UICorner")
+panelCorner.CornerRadius = UDim.new(0,20)
+panelCorner.Parent = speedPanel
+
+--==================================================
+-- TITLE
+--==================================================
+
+local speedTitle = Instance.new("TextLabel")
+
+speedTitle.Text = "NHẬP TỐC ĐỘ"
+
+speedTitle.Size = UDim2.new(0.9,0,0.20,0)
+speedTitle.Position = UDim2.new(0.05,0,0.04,0)
+
+speedTitle.BackgroundTransparency = 1
+
+speedTitle.TextColor3 = Color3.new(1,1,1)
+speedTitle.TextScaled = true
+speedTitle.Font = Enum.Font.GothamBold
+
+speedTitle.ZIndex = 1001
+speedTitle.Parent = speedPanel
+
+--==================================================
+-- TEXTBOX
+--==================================================
+
+local speedBox = Instance.new("TextBox")
+
+speedBox.Text = tostring(currentSpeed)
+speedBox.PlaceholderText = "Nhập số tốc độ"
+
+speedBox.Size = UDim2.new(0.72,0,0.24,0)
+speedBox.Position = UDim2.new(0.14,0,0.30,0)
+
+speedBox.BackgroundColor3 =
+	Color3.fromRGB(55,55,55)
+
+speedBox.TextColor3 = Color3.new(1,1,1)
+
+speedBox.TextScaled = true
+speedBox.Font = Enum.Font.GothamBold
+
+speedBox.ClearTextOnFocus = false
+speedBox.Active = true
+speedBox.Selectable = true
+
+speedBox.ZIndex = 1001
+speedBox.Parent = speedPanel
+
+local boxCorner = Instance.new("UICorner")
+boxCorner.CornerRadius = UDim.new(0,12)
+boxCorner.Parent = speedBox
+
+--==================================================
+-- OK
+--==================================================
+
+local okButton = Instance.new("TextButton")
+
+okButton.Text = "Xong"
+
+okButton.Size = UDim2.new(0.34,0,0.21,0)
+okButton.Position = UDim2.new(0.12,0,0.68,0)
+
+okButton.BackgroundColor3 =
+	Color3.fromRGB(0,130,70)
+
+okButton.TextColor3 = Color3.new(1,1,1)
+
+okButton.TextScaled = true
+okButton.Font = Enum.Font.GothamBold
+
+okButton.Active = true
+okButton.ZIndex = 1001
+
+okButton.Parent = speedPanel
+
+local okCorner = Instance.new("UICorner")
+okCorner.CornerRadius = UDim.new(0,12)
+okCorner.Parent = okButton
+
+--==================================================
+-- CANCEL
+--==================================================
+
+local cancelButton = Instance.new("TextButton")
+
+cancelButton.Text = "Hủy"
+
+cancelButton.Size = UDim2.new(0.34,0,0.21,0)
+cancelButton.Position = UDim2.new(0.54,0,0.68,0)
+
+cancelButton.BackgroundColor3 =
+	Color3.fromRGB(100,40,40)
+
+cancelButton.TextColor3 = Color3.new(1,1,1)
+
+cancelButton.TextScaled = true
+cancelButton.Font = Enum.Font.GothamBold
+
+cancelButton.Active = true
+cancelButton.ZIndex = 1001
+
+cancelButton.Parent = speedPanel
+
+local cancelCorner = Instance.new("UICorner")
+cancelCorner.CornerRadius = UDim.new(0,12)
+cancelCorner.Parent = cancelButton
+
+--==================================================
+-- MỞ MENU TỐC ĐỘ
+--==================================================
+
+speedButton.Activated:Connect(function()
+
+	if editMode then
+		return
+	end
+
+	speedPanel.Visible = true
+	speedBox.Text = tostring(currentSpeed)
+
+	task.wait(0.1)
+
+	speedBox:CaptureFocus()
+
+end)
+
+--==================================================
+-- LƯU TỐC ĐỘ
+--==================================================
+
+local function saveSpeed()
+
+	local number = tonumber(speedBox.Text)
+
+	if number then
+
+		number = math.floor(number)
+
+		currentSpeed =
+			math.clamp(
+				number,
+				minSpeed,
+				maxSpeedLimit
+			)
+	end
+
+	speedPanel.Visible = false
+
+	pcall(function()
+		speedBox:ReleaseFocus()
+	end)
+
+end
+
+okButton.Activated:Connect(saveSpeed)
+
+cancelButton.Activated:Connect(function()
+
+	speedPanel.Visible = false
+
+	pcall(function()
+		speedBox:ReleaseFocus()
+	end)
+
+end)
+
+speedBox.FocusLost:Connect(function(enterPressed)
+
+	if enterPressed then
+		saveSpeed()
+	end
+
+end)
+
+--==================================================
+-- KÉO NÚT KHI ĐANG CHỈNH
+--==================================================
+
+local function makeDraggable(button)
+
+	local dragging = false
+	local dragStart
+	local startPosition
+
+	button.InputBegan:Connect(function(input)
+
+		-- KHÔNG BẬT CHỈNH = KHÔNG KÉO
+		if not editMode then
+			return
+		end
+
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+			dragging = true
+			dragStart = input.Position
+			startPosition = button.Position
+
+		end
+
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+
+		if not dragging then
+			return
+		end
+
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseMovement then
+
+			local delta =
+				input.Position - dragStart
+
+			button.Position =
+				UDim2.new(
+					startPosition.X.Scale,
+					startPosition.X.Offset + delta.X,
+
+					startPosition.Y.Scale,
+					startPosition.Y.Offset + delta.Y
+				)
+
+		end
+
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+			dragging = false
+
+		end
+
+	end)
+
+end
+
+makeDraggable(leftButton)
+makeDraggable(rightButton)
+makeDraggable(forwardButton)
+makeDraggable(backwardButton)
+
+--==================================================
+-- EDIT MODE
+--==================================================
+
+editButton.Activated:Connect(function()
+
+	editMode = not editMode
+
+	if editMode then
+
+		editButton.BackgroundColor3 =
+			Color3.fromRGB(0,130,70)
+
+	else
+
+		editButton.BackgroundColor3 =
+			Color3.fromRGB(30,30,30)
+
+	end
+
+end)
+
+--==================================================
+-- NÚT LÁI
+--==================================================
+
+local function setupDriveButton(button, variable)
+
+	button.InputBegan:Connect(function(input)
+
+		-- ĐANG CHỈNH VỊ TRÍ = KHÔNG LÁI
+		if editMode then
+			return
+		end
+
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+			_G[variable] = true
+
+			button.BackgroundColor3 =
+				Color3.fromRGB(60,60,60)
+
+		end
+
+	end)
+
+	button.InputEnded:Connect(function(input)
+
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+			_G[variable] = false
+
+			button.BackgroundColor3 =
+				Color3.fromRGB(30,30,30)
+
+		end
+
+	end)
+
+end
+
+setupDriveButton(
+	forwardButton,
+	"CarForward"
+)
+
+setupDriveButton(
+	backwardButton,
+	"CarBackward"
+)
+
+setupDriveButton(
+	leftButton,
+	"CarLeft"
+)
+
+setupDriveButton(
+	rightButton,
+	"CarRight"
+)
+
+--==================================================
+-- GET VEHICLE SEAT
+--==================================================
+
+local function getVehicleSeat()
+
+	local character =
+		player.Character
+
+	if not character then
+		return nil
+	end
+
+	local humanoid =
+		character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid then
+		return nil
+	end
+
+	local seat =
+		humanoid.SeatPart
+
+	if seat and seat:IsA("VehicleSeat") then
+		return seat
+	end
+
+	return nil
+end
+
+--==================================================
+-- CAR CONTROL + LEFT/RIGHT FIX
+--==================================================
+
+RunService.Heartbeat:Connect(function(dt)
+
+	local seat =
+		getVehicleSeat()
+
+	if not seat then
+		return
+	end
+
+	--================================================
+	-- QUẸO
+	--================================================
+
+	local steer = 0
+
+	-- ĐÃ ĐẢO CHIỀU CHO ĐÚNG:
+	-- ← = LEFT
+	-- → = RIGHT
+
+	if _G.CarLeft and not _G.CarRight then
+
+		steer = 1
+
+	elseif _G.CarRight and not _G.CarLeft then
+
+		steer = -1
+
+	end
+
+	-- VehicleSeat
+	seat.SteerFloat = steer
+	seat.Steer = steer
+
+	--================================================
+	-- TIẾN / LÙI
+	--================================================
+
+	local throttle = 0
+
+	if _G.CarForward and not _G.CarBackward then
+
+		throttle = 1
+
+	elseif _G.CarBackward and not _G.CarForward then
+
+		throttle = -1
+
+	end
+
+	seat.ThrottleFloat = throttle
+	seat.Throttle = throttle
+
+	--================================================
+	-- BASIC VEHICLE SETTINGS
+	--================================================
+
+	seat.MaxSpeed = currentSpeed
+	seat.Torque = 100000
+	seat.TurnSpeed = turnPower
+
+	--================================================
+	-- ROOT PART
+	--================================================
+
+	local root =
+		seat.AssemblyRootPart or seat
+
+	--================================================
+	-- VẬN TỐC
+	--================================================
+
+	local velocity =
+		root.AssemblyLinearVelocity
+
+	local horizontalVelocity =
+		Vector3.new(
+			velocity.X,
+			0,
+			velocity.Z
+		)
+
+	local targetVelocity =
+		horizontalVelocity
+
+	local forwardDirection =
+		seat.CFrame.LookVector
+
+	--================================================
+	-- TIẾN
+	--================================================
+
+	if _G.CarForward then
+
+		local wanted =
+			forwardDirection *
+			currentSpeed
+
+		targetVelocity =
+			horizontalVelocity:Lerp(
+				Vector3.new(
+					wanted.X,
+					0,
+					wanted.Z
+				),
+				math.clamp(
+					acceleration * dt,
+					0,
+					1
+				)
+			)
+
+	--================================================
+	-- LÙI
+	--================================================
+
+	elseif _G.CarBackward then
+
+		local wanted =
+			-forwardDirection *
+			currentSpeed
+
+		targetVelocity =
+			horizontalVelocity:Lerp(
+				Vector3.new(
+					wanted.X,
+					0,
+					wanted.Z
+				),
+				math.clamp(
+					reverseAcceleration * dt,
+					0,
+					1
+				)
+			)
+
+	end
+
+	--================================================
+	-- GIỚI HẠN TỐC ĐỘ
+	--================================================
+
+	local flatSpeed =
+		targetVelocity.Magnitude
+
+	if flatSpeed > currentSpeed then
+
+		targetVelocity =
+			targetVelocity.Unit *
+			currentSpeed
+
+	end
+
+	root.AssemblyLinearVelocity =
+		Vector3.new(
+			targetVelocity.X,
+			velocity.Y,
+			targetVelocity.Z
+		)
+
+	--================================================
+	-- XOAY XE
+	--================================================
+
+	if steer ~= 0 then
+
+		local speed =
+			Vector3.new(
+				velocity.X,
+				0,
+				velocity.Z
+			).Magnitude
+
+		local speedFactor =
+			math.clamp(
+				speed / math.max(currentSpeed,1),
+				0.15,
+				1
+			)
+
+		local actualTurnPower =
+			math.max(
+				minTurnPower,
+				turnPower * speedFactor
+			)
+
+		local angular =
+			root.AssemblyAngularVelocity
+
+		-- Cùng chiều với steer mới
+		root.AssemblyAngularVelocity =
+			Vector3.new(
+				angular.X,
+				steer * actualTurnPower,
+				angular.Z
+			)
+
+	else
+
+		local angular =
+			root.AssemblyAngularVelocity
+
+		root.AssemblyAngularVelocity =
+			Vector3.new(
+				angular.X,
+				angular.Y * 0.78,
+				angular.Z
+			)
+
+	end
+
+end)
