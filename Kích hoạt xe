@@ -1,0 +1,151 @@
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+
+-- ======================================================= --
+-- CHỖ NÀY LÀ ĐỂ FIX LỖI ĐÈ VỊ TRÍ:
+-- Chú ý: Đổi tên trong ngoặc kép cho mỗi script khác nhau.
+-- Ví dụ: Menu 1 ông để "Menu_Aimbot", Menu 2 ông để "Menu_ESP"
+local MenuID = "Menu_Scrip" 
+-- ======================================================= --
+
+local MenuName = MenuID
+local posFileName = MenuID .. "_SavedPos.json" -- Mỗi menu sẽ tạo 1 file nhớ vị trí riêng!
+
+-- Xóa menu cũ nếu chạy lại trùng ID
+if CoreGui:FindFirstChild(MenuName) then
+    CoreGui[MenuName]:Destroy()
+end
+
+-- Tạo ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = MenuName
+screenGui.Parent = CoreGui
+
+-- Nút chứa hình ảnh (Hình vuông)
+local menuButton = Instance.new("ImageButton")
+menuButton.Name = "SquareImageButton"
+menuButton.Parent = screenGui
+menuButton.Size = UDim2.new(0.13, 0, 0.13, 0)
+
+-- ======================================================= --
+-- HỆ THỐNG LƯU VÀ TẢI LẠI VỊ TRÍ ĐỘC LẬP
+local defaultPos = UDim2.new(math.random(2, 8)/10, 0, math.random(2, 8)/10, 0)
+local savedPos = defaultPos
+
+if isfile and isfile(posFileName) then
+    local success, data = pcall(function()
+        return HttpService:JSONDecode(readfile(posFileName))
+    end)
+    if success and data and data.X and data.Y then
+        savedPos = UDim2.new(data.X.Scale, data.X.Offset, data.Y.Scale, data.Y.Offset)
+    end
+end
+menuButton.Position = savedPos
+
+local function savePosition(pos)
+    if writefile then
+        local data = {
+            X = {Scale = pos.X.Scale, Offset = pos.X.Offset},
+            Y = {Scale = pos.Y.Scale, Offset = pos.Y.Offset}
+        }
+        pcall(function()
+            writefile(posFileName, HttpService:JSONEncode(data))
+        end)
+    end
+end
+-- ======================================================= --
+
+-- Cấu hình hiển thị
+menuButton.BackgroundTransparency = 0 
+menuButton.BackgroundColor3 = Color3.fromRGB(30, 15, 50) 
+
+local aspectRatio = Instance.new("UIAspectRatioConstraint")
+aspectRatio.AspectRatio = 1
+aspectRatio.Parent = menuButton
+
+local uiStroke = Instance.new("UIStroke")
+uiStroke.Color = Color3.fromRGB(138, 43, 226) -- Viền Tím
+uiStroke.Thickness = 2
+uiStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+uiStroke.Parent = menuButton
+
+-- ======================================================= --
+-- LOGIC KÉO THẢ & KHÓA 3 GIÂY
+local dragging = false
+local dragInput, dragStart, startPos
+local isDragLocked = false
+local holdStartTime = 0
+
+local function update(input)
+    local delta = input.Position - dragStart
+    menuButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+menuButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        holdStartTime = tick() 
+        local isHolding = true
+        
+        task.spawn(function()
+            task.wait(3)
+            if isHolding then
+                isDragLocked = not isDragLocked
+                dragging = false 
+                
+                if isDragLocked then
+                    uiStroke.Color = Color3.fromRGB(255, 0, 0) -- KHÓA: ĐỎ
+                else
+                    uiStroke.Color = Color3.fromRGB(138, 43, 226) -- MỞ: TÍM
+                end
+            end
+        end)
+
+        if not isDragLocked then
+            dragging = true
+            dragStart = input.Position
+            startPos = menuButton.Position
+        end
+        
+        local releaseConn
+        releaseConn = input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                isHolding = false 
+                if dragging then
+                    dragging = false
+                    savePosition(menuButton.Position) -- LƯU VỊ TRÍ ĐỘC LẬP
+                end
+                releaseConn:Disconnect()
+            end
+        end)
+    end
+end)
+
+menuButton.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then 
+        dragInput = input 
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging and not isDragLocked then 
+        update(input) 
+    end
+end)
+
+-- Sự kiện chạy Script
+menuButton.Activated:Connect(function()
+    if tick() - holdStartTime >= 3 then return end
+    
+    print("Đang chạy script " .. MenuID)
+    
+    -- === ÔNG CHÈN SCRIPT MUỐN CHẠY VÀO DƯỚI DÒNG NÀY === --
+local args = {
+    [1] = 4
+}
+
+game:GetService("ReplicatedStorage").Knit.Knit.Services.EmoteService.RE.Emote:FireServer(unpack(args))
+
+    
+    -- ================================================== --
+end)
