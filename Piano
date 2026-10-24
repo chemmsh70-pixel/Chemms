@@ -1,0 +1,735 @@
+-- 🔒 Piano Lock v4 — khóa emote + ghi lại sự kiện (gửi log cho tôi)
+-- Chạy TRƯỚC khi bật emote (thay cho v3).
+
+local TARGETS = {PianoUI = true}          -- tên GUI của emote
+local EMOTE_PAT = {"emote", "piano"}      -- tên script bị khóa
+local STOPPRE = {"stop", "cancel", "end", "cleanup", "exit", "finish", "interrupt"}
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("RunService")
+local RepS = game:GetService("ReplicatedStorage")
+local lp = Players.LocalPlayer
+local pg = lp:WaitForChild("PlayerGui")
+
+local env = (getgenv and getgenv()) or _G
+if env.PianoLockCleanup then pcall(env.PianoLockCleanup) end
+
+local S = {lock = true, patch = true, loops = false}
+local alive, active, patchTried, msgUntil, lastHide = true, false, false, 0, 0
+local T0, T = os.clock(), {}
+local learned, disabled, lockLog, lockSeen, frozen = {}, {}, {}, {}, {}
+local patched, lastPatchLog, ctrlRef, conns = {}, {}, nil, {}
+local myFns = setmetatable({}, {__mode = "k"})
+local watched = setmetatable({}, {__mode = "k"})
+local soundSeen = {}
+local lastEmoteArgs = table.pack(1)
+local hookOK = false
+
+local chk = checkcaller or function() return false end
+local ncc = newcclosure or function(f) return f end
+local clip = setclipboard or toclipboard
+local okTb, tb0 = pcall(debug.traceback)
+local mine = okTb and tostring(tb0):match("Script '([^']+)'") or nil
+
+local function ev(s)
+	T[#T + 1] = ("%7.2f %s"):format(os.clock() - T0, s)
+	if #T > 150 then table.remove(T, 1) end
+end
+
+local function short(path)
+	path = path:gsub("^ReplicatedStorage%.Knit%.Knit%.Services%.", "")
+	path = path:gsub("^Workspace%.Characters%.", "WC.")
+	return path
+end
+
+local function notify(txt)
+	pcall(function()
+		game:GetService("StarterGui"):SetCore("SendNotification", {Title = "Piano Lock", Text = txt, Duration = 6})
+	end)
+end
+
+local function ser(v, d)
+	d = d or 0
+	local t = typeof(v)
+	if t == "string" then return '"' .. v:sub(1, 40) .. '"' end
+	if t == "Instance" then
+		local ok, n = pcall(v.GetFullName, v)
+		return ok and short(n) or tostring(v)
+	end
+	if t == "table" then
+		if d > 1 then return "{...}" end
+		local p, c = {}, 0
+		for k, x in pairs(v) do
+			c += 1
+			if c > 6 then
+				p[#p + 1] = "..."
+				break
+			end
+			p[#p + 1] = tostring(k) .. "=" .. ser(x, d + 1)
+		end
+		return "{" .. table.concat(p, ", ") .. "}"
+	end
+	return tostring(v)
+end
+
+local function isTarget(inst)
+	local ok, r = pcall(function()
+		if inst.ClassName == "ScreenGui" then return TARGETS[inst.Name] end
+		local p = inst.Parent
+		return p ~= nil and p.ClassName == "ScreenGui" and TARGETS[p.Name]
+	end)
+	return ok and r
+end
+
+---------------------------------------------------------------- GHI SỰ KIỆN
+local function onRemote(rem, m, a)
+	local ok, name = pcall(rem.GetFullName, rem)
+	if not ok or name:find("Camera", 1, true) or name:find("AntiCheat", 1, true) then return end
+	if m == "FireServer" and name:find("EmoteService.RE.Emote", 1, true) then lastEmoteArgs = a end
+	local p = {}
+	for i = 1, math.min(a.n, 5) do p[i] = ser(a[i]) end
+	ev("→ " .. short(name) .. "(" .. table.concat(p, ", "):sub(1, 70) .. ")")
+end
+
+local function onSound(snd, how)
+	pcall(function()
+		if typeof(snd) ~= "Instance" or snd.ClassName ~= "Sound" then return end
+		local id = snd.SoundId:gsub("rbxassetid://", "")
+		if id == "5639243489" then return end
+		local pn = snd.Parent and snd.Parent:GetFullName() or "nil"
+		local myCh = "Workspace.Characters." .. lp.Name
+		if pn:sub(1, 21) == "Workspace.Characters." and pn:sub(1, #myCh) ~= myCh then return end
+		local key = how .. id .. pn
+		local now = os.clock()
+		if now - (soundSeen[key] or 0) < 0.2 then return end
+		soundSeen[key] = now
+		ev("♪ " .. how .. " " .. id .. " @" .. short(pn) .. " spd=" .. ("%.2f"):format(snd.PlaybackSpeed))
+	end)
+end
+
+local function onHide(why)
+	local now = os.clock()
+	if now - lastHide < 0.3 then return end
+	lastHide = now
+	local ok, tb = pcall(debug.traceback)
+	if not ok then return end
+	task.spawn(function()
+		local parts = {}
+		for line in tostring(tb):gmatch("[^\n]+") do
+			local p, ln = line:match("Script '([^']+)', Line (%d+)")
+			if p and p ~= mine then
+				learned[p] = true
+				if #parts < 5 then parts[#parts + 1] = (p:match("[^%.]+$") or p) .. ":" .. ln end
+			end
+		end
+		ev("⚠ game ẨN/XÓA PianoUI (" .. why .. ") ← " .. table.concat(parts, " < "))
+	end)
+end
+
+if hookmetamethod and getnamecallmethod then
+	hookOK = pcall(function()
+		local oldNC, oldNI
+		oldNC = hookmetamethod(game, "__namecall", ncc(function(self, ...)
+			local m = getnamecallmethod()
+			if alive then
+				if m == "FireServer" or m == "InvokeServer" then
+					task.spawn(onRemote, self, m, table.pack(...))
+				elseif m == "Play" then
+					task.spawn(onSound, self, "Play")
+				elseif m == "PlayLocalSound" then
+					task.spawn(onSound, (...), "PlayLocalSound")
+				elseif m == "Destroy" or m == "ClearAllChildren" or m == "Remove" then
+					if not chk() and isTarget(self) then onHide(m) end
+				end
+			end
+			return oldNC(self, ...)
+		end))
+		oldNI = hookmetamethod(game, "__newindex", ncc(function(self, k, v)
+			if alive then
+				if k == "Playing" and v == true then
+					task.spawn(onSound, self, "Playing=true")
+				elseif (v == false and (k == "Enabled" or k == "Visible")) or (k == "Parent" and v == nil) then
+					if not chk() and isTarget(self) then onHide(tostring(k)) end
+				end
+			end
+			return oldNI(self, k, v)
+		end))
+	end)
+end
+
+---------------------------------------------------------------- KHÓA
+local function signals(all)
+	local L = {}
+	local ch = lp.Character
+	local h = ch and ch:FindFirstChildOfClass("Humanoid")
+	if h then
+		L[#L + 1] = {"Humanoid.Jumping", h.Jumping}
+		L[#L + 1] = {"Humanoid.Running", h.Running}
+		L[#L + 1] = {"Humanoid.StateChanged", h.StateChanged}
+		L[#L + 1] = {"Humanoid.Jump", h:GetPropertyChangedSignal("Jump")}
+		L[#L + 1] = {"Humanoid.MoveDirection", h:GetPropertyChangedSignal("MoveDirection")}
+	end
+	L[#L + 1] = {"UIS.JumpRequest", UIS.JumpRequest}
+	if all then
+		L[#L + 1] = {"UIS.InputBegan", UIS.InputBegan}
+		L[#L + 1] = {"UIS.InputEnded", UIS.InputEnded}
+	end
+	if all or S.loops then
+		L[#L + 1] = {"Heartbeat", RS.Heartbeat}
+		L[#L + 1] = {"RenderStepped", RS.RenderStepped}
+		L[#L + 1] = {"Stepped", RS.Stepped}
+	end
+	return L
+end
+
+local function scrOf(f)
+	local ok, s = pcall(function() return getfenv(f).script end)
+	if ok and typeof(s) == "Instance" then return s end
+end
+
+local function isTargetScript(s)
+	if not s then return false end
+	if learned[s:GetFullName()] then return true end
+	local n = s.Name:lower()
+	for _, p in ipairs(EMOTE_PAT) do
+		if n:find(p, 1, true) then return true end
+	end
+	return false
+end
+
+local function scan()
+	if not getconnections then return end
+	for _, sg in ipairs(signals(false)) do
+		local ok, cons = pcall(getconnections, sg[2])
+		if ok and type(cons) == "table" then
+			for _, c in ipairs(cons) do
+				local okf, f = pcall(function() return c.Function end)
+				local s = okf and f and not myFns[f] and scrOf(f)
+				if s and isTargetScript(s) then
+					local en = true
+					pcall(function() if c.Enabled == false then en = false end end)
+					if en then
+						local done = pcall(function() c:Disable() end)
+						if not done then done = pcall(function() c:Disconnect() end) end
+						if done then
+							if #disabled < 300 then disabled[#disabled + 1] = c end
+							local line = sg[1] .. " <- " .. s:GetFullName()
+							if not lockSeen[line] then
+								lockSeen[line] = true
+								lockLog[#lockLog + 1] = line
+								ev("🔒 khóa " .. line)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+local function unlock()
+	for _, c in ipairs(disabled) do pcall(function() c:Enable() end) end
+	disabled = {}
+end
+
+local function findController()
+	local ps = lp:FindFirstChild("PlayerScripts")
+	local m = ps and ps:FindFirstChild("EmoteController", true)
+	if m and m:IsA("ModuleScript") then
+		local ok, c = pcall(require, m)
+		if ok and type(c) == "table" then return c end
+	end
+end
+
+local function patchStops()
+	if patchTried then return end
+	patchTried = true
+	ctrlRef = ctrlRef or findController()
+	if not ctrlRef then
+		ev("🩹 không require được EmoteController")
+		return
+	end
+	local names = {}
+	pcall(function()
+		for k, v in pairs(ctrlRef) do
+			if type(k) == "string" and type(v) == "function" then
+				local n = k:lower()
+				for _, p in ipairs(STOPPRE) do
+					if n:sub(1, #p) == p then
+						patched[k] = v
+						names[#names + 1] = k
+						ctrlRef[k] = function()
+							local now = os.clock()
+							if now - (lastPatchLog[k] or 0) > 0.3 then
+								lastPatchLog[k] = now
+								ev("⛔ chặn EmoteController." .. k .. "()")
+							end
+						end
+						break
+					end
+				end
+			end
+		end
+	end)
+	ev("🩹 vá: " .. (#names > 0 and table.concat(names, ",") or "(không có hàm Stop nào)"))
+end
+
+local function unpatchStops()
+	patchTried = false
+	if ctrlRef then
+		pcall(function()
+			for k, v in pairs(patched) do ctrlRef[k] = v end
+		end)
+	end
+	patched = {}
+end
+
+---------------------------------------------------------------- THẢ NHÂN VẬT
+local function emoteRemotes()
+	local list = {}
+	for _, d in ipairs(RepS:GetDescendants()) do
+		if (d:IsA("RemoteEvent") or d:IsA("UnreliableRemoteEvent")) and d:GetFullName():find("EmoteService", 1, true) then
+			list[#list + 1] = d
+		end
+	end
+	return list
+end
+
+local function freezeClient()
+	for _, r in ipairs(emoteRemotes()) do
+		local ok, cons = pcall(getconnections, r.OnClientEvent)
+		if ok and type(cons) == "table" then
+			for _, c in ipairs(cons) do
+				local okf, f = pcall(function() return c.Function end)
+				if not (okf and f and myFns[f]) then
+					if pcall(function() c:Disable() end) then frozen[#frozen + 1] = c end
+				end
+			end
+		end
+	end
+	ev("❄ đóng băng " .. #frozen .. " kết nối OnClientEvent của EmoteService")
+end
+
+local function unfreeze()
+	for _, c in ipairs(frozen) do pcall(function() c:Enable() end) end
+	if #frozen > 0 then ev("☀ mở băng " .. #frozen .. " kết nối") end
+	frozen = {}
+end
+
+local function releaseChar()
+	if not getconnections then
+		notify("Executor thiếu getconnections")
+		return
+	end
+	freezeClient()
+	for _, r in ipairs(emoteRemotes()) do
+		if r.Name == "Emote" then
+			pcall(function() r:FireServer(table.unpack(lastEmoteArgs, 1, lastEmoteArgs.n)) end)
+			ev("🧪 gửi Emote(" .. ser(lastEmoteArgs[1]) .. ") để server tắt pose")
+		end
+	end
+end
+
+---------------------------------------------------------------- THÔNG TIN
+local SIGS = {"MouseButton1Down", "MouseButton1Click", "Activated", "TouchTap", "InputBegan"}
+
+local function fnInfo(f)
+	local r = {}
+	local sc = "?"
+	pcall(function() sc = getfenv(f).script:GetFullName() end)
+	r[1] = "script=" .. (sc:match("[^%.]+$") or sc)
+	pcall(function()
+		local i = debug.getinfo(f)
+		r[#r + 1] = "L" .. tostring(i.linedefined)
+	end)
+	pcall(function()
+		local cs = {}
+		for _, c in pairs(debug.getconstants(f)) do
+			if type(c) == "string" and #cs < 15 then cs[#cs + 1] = c:sub(1, 24) end
+		end
+		r[#r + 1] = "const=" .. table.concat(cs, ",")
+	end)
+	pcall(function()
+		local us = {}
+		for i, u in pairs(debug.getupvalues(f)) do
+			if #us < 12 then
+				local tv = typeof(u)
+				if tv == "boolean" or tv == "number" or tv == "string" then
+					us[#us + 1] = i .. "=" .. tostring(u):sub(1, 24)
+				elseif tv == "Instance" then
+					us[#us + 1] = i .. "=" .. u.ClassName .. ":" .. u.Name
+				else
+					us[#us + 1] = i .. "=<" .. tv .. ">"
+				end
+			end
+		end
+		r[#r + 1] = "up=" .. table.concat(us, ",")
+	end)
+	return r
+end
+
+local function handlersInfo(gui, add)
+	if not getconnections then
+		add("(không có getconnections)")
+		return
+	end
+	local seen, n = {}, 0
+	for _, o in ipairs(gui:GetDescendants()) do
+		if n >= 4 then break end
+		if o:IsA("GuiObject") then
+			for _, sig in ipairs(SIGS) do
+				local ok, cons = pcall(function() return getconnections(o[sig]) end)
+				if ok and type(cons) == "table" then
+					for _, c in ipairs(cons) do
+						local okf, f = pcall(function() return c.Function end)
+						if okf and f and not myFns[f] and not seen[f] and n < 4 then
+							seen[f] = true
+							n += 1
+							add(o.Name .. "." .. sig .. " -> " .. table.concat(fnInfo(f), " | "))
+						end
+					end
+				end
+			end
+		end
+	end
+	if n == 0 then add("(không thấy handler)") end
+end
+
+local function childNames(inst, limit)
+	local t = {}
+	if inst then
+		for _, d in ipairs(inst:GetChildren()) do
+			if #t < limit then t[#t + 1] = d.Name end
+		end
+	end
+	return table.concat(t, ",")
+end
+
+local function report()
+	local o = {}
+	local function add(s) o[#o + 1] = s end
+	add(("v4 hook=%s getconn=%s active=%s lock=%s patch=%s"):format(tostring(hookOK), tostring(getconnections ~= nil), tostring(active), tostring(S.lock), tostring(S.patch)))
+	add("--- ĐÃ KHÓA ---")
+	for _, l in ipairs(lockLog) do add(l) end
+	add("--- ĐÃ HỌC ---")
+	for p in pairs(learned) do add(p) end
+	add("--- SERVICES --- " .. childNames(RepS:FindFirstChild("Services", true), 80))
+	local ps = lp:FindFirstChild("PlayerScripts")
+	local ctl = ps and ps:FindFirstChild("Controllers")
+	local cn = {}
+	if ctl then
+		for _, d in ipairs(ctl:GetDescendants()) do
+			if d:IsA("ModuleScript") and #cn < 100 then cn[#cn + 1] = d.Name end
+		end
+	end
+	add("--- CONTROLLERS --- " .. table.concat(cn, ","))
+	add("--- REMOTE EMOTESERVICE ---")
+	for _, r in ipairs(emoteRemotes()) do add(r.ClassName .. " " .. short(r:GetFullName())) end
+	add("--- EMOTECONTROLLER ---")
+	local ctrl = ctrlRef or findController()
+	if ctrl then
+		ctrlRef = ctrl
+		local n = 0
+		for k, v in pairs(ctrl) do
+			n += 1
+			if n > 40 then
+				add("...")
+				break
+			end
+			local real = patched[k] or v
+			local tv = typeof(real)
+			if tv == "function" then
+				add("  " .. tostring(k) .. "() " .. table.concat(fnInfo(real), " | "))
+			elseif tv == "table" then
+				local ks = {}
+				for kk in pairs(v) do
+					if #ks < 8 then ks[#ks + 1] = tostring(kk) end
+				end
+				add("  " .. tostring(k) .. " = {" .. table.concat(ks, ",") .. "}")
+			else
+				add("  " .. tostring(k) .. " = " .. tostring(v):sub(1, 40))
+			end
+		end
+	else
+		add("(không require được)")
+	end
+	add("--- NÚT ĐÀN ---")
+	for name in pairs(TARGETS) do
+		local g = pg:FindFirstChild(name)
+		if g then handlersInfo(g, add) end
+	end
+	add("--- SCRIPT EMOTE ĐANG NGHE ---")
+	if getconnections then
+		for _, sg in ipairs(signals(true)) do
+			local ok, cons = pcall(getconnections, sg[2])
+			if ok and type(cons) == "table" then
+				local cnt = 0
+				for _, cc in ipairs(cons) do
+					local okf, f = pcall(function() return cc.Function end)
+					local s = okf and f and not myFns[f] and scrOf(f)
+					if s and isTargetScript(s) then cnt += 1 end
+				end
+				if cnt > 0 then add(sg[1] .. " x" .. cnt) end
+			end
+		end
+	end
+	add("--- DÒNG THỜI GIAN ---")
+	for _, l in ipairs(T) do add(l) end
+	return table.concat(o, "\n")
+end
+
+---------------------------------------------------------------- THEO DÕI
+local function watchGui(g)
+	if watched[g] then return end
+	watched[g] = true
+	ev("GUI + " .. g.Name)
+	table.insert(conns, g:GetPropertyChangedSignal("Enabled"):Connect(function()
+		ev(g.Name .. ".Enabled=" .. tostring(g.Enabled))
+	end))
+	local n = 0
+	for _, o in ipairs(g:GetDescendants()) do
+		if o:IsA("GuiObject") then
+			n += 1
+			if n > 150 then break end
+			if o.Parent == g then
+				table.insert(conns, o:GetPropertyChangedSignal("Visible"):Connect(function()
+					ev(g.Name .. "/" .. o.Name .. ".Visible=" .. tostring(o.Visible))
+				end))
+			end
+			table.insert(conns, o.InputBegan:Connect(function(i)
+				local t = i.UserInputType
+				if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then
+					ev("KEY " .. o.Name .. (o:IsA("TextButton") and (":" .. o.Text) or ""))
+				end
+			end))
+		end
+	end
+end
+
+local function watchRemote(r)
+	if not (r:IsA("RemoteEvent") or r:IsA("UnreliableRemoteEvent")) then return end
+	local full = r:GetFullName()
+	local l = full:lower()
+	if l:find("emote", 1, true) or l:find("piano", 1, true) then
+		local f = function(...)
+			local a = table.pack(...)
+			local p = {}
+			for i = 1, math.min(a.n, 5) do p[i] = ser(a[i]) end
+			ev("← " .. short(full) .. "(" .. table.concat(p, ", "):sub(1, 70) .. ")")
+		end
+		myFns[f] = true
+		table.insert(conns, r.OnClientEvent:Connect(f))
+	end
+end
+
+local lastAttr = {}
+local function watchChar(ch)
+	table.insert(conns, ch.ChildAdded:Connect(function(c) ev("char + " .. c.Name) end))
+	table.insert(conns, ch.ChildRemoved:Connect(function(c) ev("char - " .. c.Name) end))
+	table.insert(conns, ch.AttributeChanged:Connect(function(a)
+		local v = tostring(ch:GetAttribute(a))
+		if lastAttr[a] ~= v then
+			lastAttr[a] = v
+			ev("char@" .. a .. "=" .. v)
+		end
+	end))
+	table.insert(conns, ch.DescendantAdded:Connect(function(d)
+		local n = d.Name:lower()
+		if n:find("piano", 1, true) or n:find("keyboard", 1, true) then ev("char ++ " .. d.Name) end
+	end))
+	task.spawn(function()
+		local h = ch:WaitForChild("Humanoid", 10)
+		if not h then return end
+		table.insert(conns, h.StateChanged:Connect(function(_, new) ev("state " .. new.Name) end))
+		local an = h:WaitForChild("Animator", 10)
+		if an then
+			table.insert(conns, an.AnimationPlayed:Connect(function(t)
+				local v = t.Priority.Value
+				if v >= 2 and v < 1000 then
+					local id = tostring(t.Animation and t.Animation.AnimationId):gsub("rbxassetid://", "")
+					ev("anim " .. id .. " " .. t.Priority.Name .. " loop=" .. tostring(t.Looped))
+				end
+			end))
+		end
+	end)
+end
+
+table.insert(conns, UIS.JumpRequest:Connect(function() ev("⤒ JumpRequest") end))
+for _, d in ipairs(RepS:GetDescendants()) do watchRemote(d) end
+table.insert(conns, RepS.DescendantAdded:Connect(watchRemote))
+for _, g in ipairs(pg:GetChildren()) do
+	if g:IsA("ScreenGui") and TARGETS[g.Name] then watchGui(g) end
+end
+table.insert(conns, pg.ChildAdded:Connect(function(g)
+	if g:IsA("ScreenGui") then
+		ev("GUI + " .. g.Name)
+		if TARGETS[g.Name] then watchGui(g) end
+	end
+end))
+table.insert(conns, pg.ChildRemoved:Connect(function(g)
+	if g:IsA("ScreenGui") then ev("GUI - " .. g.Name) end
+end))
+if lp.Character then watchChar(lp.Character) end
+table.insert(conns, lp.CharacterAdded:Connect(watchChar))
+
+local function targetGui()
+	for name in pairs(TARGETS) do
+		local g = pg:FindFirstChild(name)
+		if g and g:IsA("ScreenGui") and g.Enabled then return g end
+	end
+end
+
+task.spawn(function()
+	while alive do
+		task.wait(0.25)
+		if S.lock and targetGui() then
+			if not active then
+				active = true
+				ev("🔒 bắt đầu khóa")
+			end
+			scan()
+			if S.patch then pcall(patchStops) end
+		elseif active then
+			active = false
+			ev("🔓 thôi khóa")
+			unlock()
+			unpatchStops()
+			unfreeze()
+		end
+	end
+end)
+
+---------------------------------------------------------------- MENU
+local MENU = "PianoLockMenu"
+local host = (gethui and gethui()) or pg
+for _, p in ipairs({host, pg}) do
+	local x = p:FindFirstChild(MENU)
+	if x then x:Destroy() end
+end
+
+local function mk(class, props, par)
+	local o = Instance.new(class)
+	for k, v in pairs(props) do o[k] = v end
+	o.Parent = par
+	return o
+end
+
+local sg = mk("ScreenGui", {Name = MENU, ResetOnSpawn = false, DisplayOrder = 999}, host)
+local main = mk("Frame", {
+	Size = UDim2.fromOffset(250, 270),
+	Position = UDim2.new(0, 10, 0.5, -135),
+	BackgroundColor3 = Color3.fromRGB(25, 25, 30),
+	Active = true,
+	Draggable = true,
+}, sg)
+mk("UICorner", {CornerRadius = UDim.new(0, 10)}, main)
+mk("TextLabel", {
+	Size = UDim2.new(1, -44, 0, 30), Position = UDim2.fromOffset(10, 0),
+	BackgroundTransparency = 1, Text = "🔒 Piano Lock v4",
+	TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 15,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, main)
+local closeBtn = mk("TextButton", {
+	Size = UDim2.fromOffset(28, 22), Position = UDim2.new(1, -36, 0, 4),
+	Text = "X", BackgroundColor3 = Color3.fromRGB(170, 50, 50),
+	TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 13,
+}, main)
+mk("UICorner", {}, closeBtn)
+
+local function btn(text, y, color)
+	local b = mk("TextButton", {
+		Size = UDim2.new(1, -20, 0, 26), Position = UDim2.fromOffset(10, y),
+		Text = text, BackgroundColor3 = color, TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.Gotham, TextSize = 13,
+	}, main)
+	mk("UICorner", {}, b)
+	return b
+end
+
+local ON, OFF = Color3.fromRGB(40, 140, 80), Color3.fromRGB(90, 90, 100)
+local function toggle(label, key, y, onChange)
+	local b = btn("", y, ON)
+	local function paint()
+		b.Text = label .. ": " .. (S[key] and "BẬT" or "TẮT")
+		b.BackgroundColor3 = S[key] and ON or OFF
+	end
+	paint()
+	b.MouseButton1Click:Connect(function()
+		S[key] = not S[key]
+		paint()
+		if onChange then onChange(S[key]) end
+	end)
+	return paint
+end
+
+local paintLock = toggle("Khóa emote", "lock", 34, function(on)
+	if not on then
+		unlock()
+		unpatchStops()
+		unfreeze()
+	end
+end)
+toggle("Vá hàm Stop (thử)", "patch", 64, function(on)
+	if not on then unpatchStops() end
+end)
+toggle("Khóa vòng lặp (thử)", "loops", 94)
+
+local relBtn = btn("🧪 Thả nhân vật (giữ đàn)", 130, Color3.fromRGB(150, 90, 40))
+local copyBtn = btn("📋 Copy log (gửi cho tôi)", 160, Color3.fromRGB(70, 90, 160))
+local openBtn = btn("Mở khóa & thoát đàn", 190, Color3.fromRGB(60, 60, 70))
+local status = mk("TextLabel", {
+	Size = UDim2.new(1, -20, 0, 44), Position = UDim2.fromOffset(10, 222),
+	BackgroundTransparency = 1, Text = "", TextWrapped = true,
+	TextColor3 = Color3.fromRGB(180, 180, 190), Font = Enum.Font.Gotham, TextSize = 11,
+	TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+}, main)
+
+relBtn.MouseButton1Click:Connect(function()
+	releaseChar()
+	msgUntil = os.clock() + 3
+	status.Text = "Đã gửi lệnh tắt pose. Thử bấm phím đàn & đi lại!"
+end)
+
+copyBtn.MouseButton1Click:Connect(function()
+	local ok, txt = pcall(report)
+	txt = ok and txt or ("LỖI: " .. tostring(txt))
+	msgUntil = os.clock() + 4
+	if clip then
+		clip(txt)
+		status.Text = "Đã copy " .. #txt .. " ký tự → dán gửi tôi!"
+	else
+		warn(txt)
+		status.Text = "Không có clipboard – xem console (F9)"
+	end
+end)
+
+openBtn.MouseButton1Click:Connect(function()
+	S.lock = false
+	unlock()
+	unpatchStops()
+	unfreeze()
+	paintLock()
+	notify("Đã mở khóa. Nhảy 1 lần để thoát emote.")
+end)
+
+local function cleanup()
+	alive, S.lock = false, false
+	unlock()
+	unpatchStops()
+	unfreeze()
+	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+	pcall(function() sg:Destroy() end)
+end
+env.PianoLockCleanup = cleanup
+closeBtn.MouseButton1Click:Connect(cleanup)
+
+task.spawn(function()
+	while alive do
+		if os.clock() >= msgUntil then
+			status.Text = ("Hook: %s | Khóa: %d | Vá: %d | Băng: %d | %s"):format(
+				hookOK and "OK" or "KHÔNG", #lockLog, (next(patched) and 1 or 0), #frozen, active and "ĐANG KHÓA" or "chờ emote")
+		end
+		task.wait(0.5)
+	end
+end)
