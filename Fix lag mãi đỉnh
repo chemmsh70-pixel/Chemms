@@ -1,0 +1,858 @@
+-- LocalScript: StarterPlayer > StarterPlayerScripts
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local ContentProvider = game:GetService("ContentProvider")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+---------------------------------------------------------------- CÀI ĐẶT (sửa ở đây nếu muốn)
+local ALERT_RANGE = 120 -- chỉ cảnh báo đối thủ trong tầm này (studs)
+local ALERT_TIME = 0.8 -- viền đỏ/xanh hiện bao lâu (giây)
+local PRINT_IDS = false -- true = in ID animation ra F9 để lấy ID counter của game
+local COUNTER_IDS = {} -- điền ID animation counter, ví dụ {1234567890, 987654321}
+local COUNTER_WORDS = {"counter", "parry", "reversal", "deflect"} -- tên chứa chữ này = counter
+local SOUND_IDS = { -- âm cảnh báo, thử lần lượt, cái nào load được thì dùng
+	"rbxasset://sounds/electronicpingshort.wav",
+	"rbxasset://sounds/button.wav",
+	"rbxasset://sounds/snap.mp3",
+}
+
+local GRAY = Color3.fromRGB(163, 162, 165)
+local ON_COLOR = Color3.fromRGB(46, 160, 90)
+local OFF_COLOR = Color3.fromRGB(90, 90, 105)
+local HL_NAME = "LagMenuHL"
+local COLORS = {damage = Color3.fromRGB(255, 45, 45), counter = Color3.fromRGB(45, 130, 255)}
+
+local opt = {freeze = false, hide = false, effects = false, details = false,
+	anim = false, alert = false, map = false}
+local selected = nil -- người được chạm chọn
+local ground = nil -- mảnh đất dưới chân (khi bật mục 7)
+
+local weak = {__mode = "k"}
+local function newWeak() return setmetatable({}, weak) end
+local state, effectOff, nameMode = newWeak(), newWeak(), newWeak()
+local animators, animScripts = newWeak(), newWeak()
+local mapHid, mapOff = newWeak(), newWeak()
+local activeTracks, pending, lastPlaying = newWeak(), newWeak(), newWeak()
+local watchedChars = newWeak()
+local alertHL, alertTag, alertLast, alertUntil = newWeak(), newWeak(), newWeak(), newWeak()
+local lastSound = {}
+
+local function toSet(list)
+	local s = {}
+	for _, v in list do s[v] = true end
+	return s
+end
+
+local function hasWord(str, words)
+	str = string.lower(str)
+	for _, w in words do
+		if string.find(str, w, 1, true) then return true end
+	end
+	return false
+end
+
+local function set(obj, prop, val)
+	pcall(function() obj[prop] = val end)
+end
+
+local function round(obj, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = r
+	c.Parent = obj
+end
+
+local function cap(obj, size)
+	local c = Instance.new("UITextSizeConstraint")
+	c.MaxTextSize = size
+	c.Parent = obj
+end
+
+-- phân loại instance
+local EMITTER = toSet({"ParticleEmitter", "Trail", "Beam", "Fire", "Smoke", "Sparkles", "Explosion"})
+local EFFECT = toSet({"PointLight", "SpotLight", "SurfaceLight", "Highlight", "BloomEffect", "BlurEffect",
+	"ColorCorrectionEffect", "DepthOfFieldEffect", "SunRaysEffect", "Atmosphere", "Clouds"})
+for k in EMITTER do EFFECT[k] = true end
+local DETAIL = toSet({"Decal", "Texture", "SurfaceAppearance", "Shirt", "Pants", "ShirtGraphic",
+	"CharacterMesh", "Accessory", "Hat"})
+local MAP_OFF = toSet({"SurfaceGui", "BillboardGui", "ParticleEmitter", "Trail", "Beam", "Fire", "Smoke",
+	"Sparkles", "PointLight", "SpotLight", "SurfaceLight", "Highlight"})
+local ACTION = toSet({Enum.AnimationPriority.Action, Enum.AnimationPriority.Action2,
+	Enum.AnimationPriority.Action3, Enum.AnimationPriority.Action4})
+local counterSet = toSet(COUNTER_IDS)
+local FX_FOLDERS = {"debris", "effect", "vfx", "fx", "thrown", "particle"}
+local FX_NAMES = {"rock", "debris", "chunk", "rubble", "crater", "shard", "dust", "dirt"}
+
+local setOption -- gán ở dưới
+
+---------------------------------------------------------------- UI
+local gui = Instance.new("ScreenGui")
+gui.Name = "LagMenu"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 100
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = PlayerGui
+
+-- nút tròn, to 12% màn hình
+local holder = Instance.new("Frame")
+holder.BackgroundTransparency = 1
+holder.AnchorPoint = Vector2.new(0.5, 0.5)
+holder.Position = UDim2.fromScale(0.9, 0.5)
+holder.SizeConstraint = Enum.SizeConstraint.RelativeYY
+holder.Size = UDim2.fromScale(0.12, 0.12)
+holder.Parent = gui
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.fromScale(1, 1)
+button.AutoButtonColor = false
+button.TextScaled = true
+button.Font = Enum.Font.SourceSansBold
+button.TextColor3 = Color3.new(1, 1, 1)
+button.Parent = holder
+round(button, UDim.new(1, 0))
+
+local pad = Instance.new("UIPadding")
+pad.PaddingLeft = UDim.new(0.15, 0)
+pad.PaddingRight = UDim.new(0.15, 0)
+pad.PaddingTop = UDim.new(0.2, 0)
+pad.PaddingBottom = UDim.new(0.2, 0)
+pad.Parent = button
+
+local stroke = Instance.new("UIStroke")
+stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+stroke.Thickness = 3
+stroke.Parent = button
+
+-- bảng menu
+local panel = Instance.new("Frame")
+panel.Visible = false
+panel.Active = true
+panel.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+panel.Size = UDim2.fromScale(0.36, 0.8)
+panel.Parent = gui
+round(panel, UDim.new(0, 12))
+
+local limit = Instance.new("UISizeConstraint")
+limit.MinSize = Vector2.new(250, 320)
+limit.MaxSize = Vector2.new(390, 480)
+limit.Parent = panel
+
+local pstroke = Instance.new("UIStroke")
+pstroke.Thickness = 2
+pstroke.Color = Color3.fromRGB(90, 90, 110)
+pstroke.Parent = panel
+
+local ppad = Instance.new("UIPadding")
+ppad.PaddingTop = UDim.new(0, 8)
+ppad.PaddingBottom = UDim.new(0, 8)
+ppad.PaddingLeft = UDim.new(0, 8)
+ppad.PaddingRight = UDim.new(0, 8)
+ppad.Parent = panel
+
+local list = Instance.new("UIListLayout")
+list.SortOrder = Enum.SortOrder.LayoutOrder
+list.Padding = UDim.new(0.011, 0)
+list.Parent = panel
+
+local function placePanel()
+	local scr, ps = gui.AbsoluteSize, panel.AbsoluteSize
+	local hp, hs = holder.AbsolutePosition, holder.AbsoluteSize
+	local x
+	if hp.X + hs.X / 2 > scr.X / 2 then
+		x = hp.X - ps.X - 8
+	else
+		x = hp.X + hs.X + 8
+	end
+	local y = hp.Y + hs.Y / 2 - ps.Y / 2
+	x = math.clamp(x, 4, math.max(4, scr.X - ps.X - 4))
+	y = math.clamp(y, 4, math.max(4, scr.Y - ps.Y - 4))
+	panel.Position = UDim2.fromOffset(x, y)
+end
+
+local function setPanel(show)
+	panel.Visible = show
+	if show then placePanel() end
+end
+
+local function relayout()
+	if panel.Visible then placePanel() end
+end
+holder:GetPropertyChangedSignal("AbsolutePosition"):Connect(relayout)
+panel:GetPropertyChangedSignal("AbsoluteSize"):Connect(relayout)
+
+local title = Instance.new("TextLabel")
+title.LayoutOrder = 0
+title.Size = UDim2.new(1, 0, 0.09, 0)
+title.BackgroundTransparency = 1
+title.Text = "MENU GIẢM LAG"
+title.TextScaled = true
+title.Font = Enum.Font.SourceSansBold
+title.TextColor3 = Color3.new(1, 1, 1)
+title.Parent = panel
+cap(title, 24)
+
+local close = Instance.new("TextButton")
+close.AnchorPoint = Vector2.new(1, 0.5)
+close.Position = UDim2.fromScale(1, 0.5)
+close.Size = UDim2.fromScale(0.13, 0.9)
+close.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+close.Text = "X"
+close.TextScaled = true
+close.Font = Enum.Font.SourceSansBold
+close.TextColor3 = Color3.new(1, 1, 1)
+close.Parent = title
+round(close, UDim.new(0, 6))
+cap(close, 20)
+close.Activated:Connect(function() setPanel(false) end)
+
+local ROWS = {
+	{"freeze", "1. Đứng yên người chơi"},
+	{"hide", "2. Ẩn người chơi"},
+	{"effects", "3. Xoá hiệu ứng đồ hoạ"},
+	{"details", "4. Xoá màu & chi tiết"},
+	{"anim", "5. Xoá animation"},
+	{"alert", "6. Cảnh báo chiêu"},
+	{"map", "7. Ẩn công trình/map"},
+}
+local pills = {}
+
+for i, r in ROWS do
+	local key = r[1]
+	local row = Instance.new("TextButton")
+	row.LayoutOrder = i
+	row.Size = UDim2.new(1, 0, 0.105, 0)
+	row.BackgroundColor3 = Color3.fromRGB(44, 44, 58)
+	row.Text = ""
+	row.Parent = panel
+	round(row, UDim.new(0, 8))
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromScale(0.04, 0)
+	label.Size = UDim2.fromScale(0.68, 1)
+	label.Text = r[2]
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextScaled = true
+	label.Font = Enum.Font.SourceSansSemibold
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Parent = row
+	cap(label, 20)
+
+	local pill = Instance.new("TextLabel")
+	pill.AnchorPoint = Vector2.new(1, 0.5)
+	pill.Position = UDim2.fromScale(0.97, 0.5)
+	pill.Size = UDim2.fromScale(0.22, 0.7)
+	pill.TextScaled = true
+	pill.Font = Enum.Font.SourceSansBold
+	pill.TextColor3 = Color3.new(1, 1, 1)
+	pill.Parent = row
+	round(pill, UDim.new(0, 6))
+	cap(pill, 16)
+	pills[key] = pill
+
+	row.Activated:Connect(function()
+		setOption(key, not opt[key])
+	end)
+end
+
+local note = Instance.new("TextLabel")
+note.LayoutOrder = 8
+note.Size = UDim2.new(1, 0, 0.07, 0)
+note.BackgroundTransparency = 1
+note.Text = "Mục 3, 4: xoá luôn, vào lại game mới có lại"
+note.TextColor3 = Color3.fromRGB(190, 190, 205)
+note.TextScaled = true
+note.Font = Enum.Font.SourceSans
+note.Parent = panel
+cap(note, 14)
+
+local highlight = Instance.new("Highlight")
+highlight.Name = HL_NAME
+highlight.FillColor = Color3.fromRGB(60, 220, 110)
+highlight.FillTransparency = 0.6
+highlight.OutlineColor = Color3.new(1, 1, 1)
+highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+
+local function updateUI()
+	local n = 0
+	for key, pill in pills do
+		local on = opt[key]
+		if on then n += 1 end
+		pill.Text = on and "BẬT" or "TẮT"
+		pill.BackgroundColor3 = on and ON_COLOR or OFF_COLOR
+	end
+	button.Text = "MENU\n" .. n .. "/" .. #ROWS
+	button.BackgroundColor3 = n > 0 and ON_COLOR or Color3.fromRGB(55, 55, 70)
+	stroke.Color = n > 0 and Color3.fromRGB(150, 255, 190) or Color3.new(1, 1, 1)
+end
+
+---------------------------------------------------------------- 6: Cảnh báo chiêu (đỏ = chiêu, xanh = counter)
+local function makeSound(speed)
+	local s = Instance.new("Sound")
+	s.Name = "LagMenuSound"
+	s.Volume = 1.2
+	s.PlaybackSpeed = speed
+	s.SoundId = SOUND_IDS[1]
+	s.Parent = gui
+	task.spawn(function()
+		for _, id in SOUND_IDS do
+			s.SoundId = id
+			pcall(function() ContentProvider:PreloadAsync({s}) end)
+			if s.IsLoaded then return end
+		end
+	end)
+	return s
+end
+local sndDamage, sndCounter = makeSound(0.7), makeSound(1.8) -- cùng âm, khác cao độ
+
+local function alert(plr, kind)
+	local char = plr.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+	local now = os.clock()
+	if kind ~= "counter" and alertLast[plr] and now - alertLast[plr] < 0.25 then return end
+	alertLast[plr] = now
+	local color = COLORS[kind]
+
+	local hl = alertHL[plr]
+	if not hl then
+		hl = Instance.new("Highlight")
+		hl.Name = HL_NAME
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.FillTransparency = 0.3
+		alertHL[plr] = hl
+	end
+	hl.FillColor = color
+	hl.OutlineColor = color
+	hl.Parent = char
+
+	local tag = alertTag[plr]
+	if not tag then
+		tag = Instance.new("BillboardGui")
+		tag.Name = "LagMenuTag"
+		tag.AlwaysOnTop = true
+		tag.Size = UDim2.fromOffset(110, 30)
+		tag.StudsOffset = Vector3.new(0, 4.5, 0)
+		tag.ResetOnSpawn = false
+		local lbl = Instance.new("TextLabel")
+		lbl.Name = "L"
+		lbl.Size = UDim2.fromScale(1, 1)
+		lbl.TextScaled = true
+		lbl.Font = Enum.Font.SourceSansBold
+		lbl.TextColor3 = Color3.new(1, 1, 1)
+		lbl.Parent = tag
+		round(lbl, UDim.new(0, 8))
+		tag.Parent = PlayerGui
+		alertTag[plr] = tag
+	end
+	tag.Adornee = root
+	tag.L.Text = (kind == "counter") and "COUNTER!" or "CHIÊU!"
+	tag.L.BackgroundColor3 = color
+	tag.Enabled = true
+
+	if now - (lastSound[kind] or 0) > 0.12 then
+		lastSound[kind] = now
+		local snd = (kind == "counter") and sndCounter or sndDamage
+		snd.TimePosition = 0
+		snd:Play()
+	end
+
+	alertUntil[plr] = now + ALERT_TIME
+	task.delay(ALERT_TIME, function()
+		if os.clock() >= (alertUntil[plr] or 0) then
+			hl.Parent = nil
+			tag.Enabled = false
+		end
+	end)
+end
+
+local function ownerOf(a)
+	local hum = a.Parent
+	local char = hum and hum.Parent
+	if char and char:IsA("Model") then return Players:GetPlayerFromCharacter(char) end
+	return nil
+end
+
+local function moveKind(track)
+	local anim = track.Animation
+	local id = anim and anim.AnimationId or ""
+	local num = tonumber(string.match(id, "%d+"))
+	local nm = track.Name .. " " .. (anim and anim.Name or "")
+	if (num and counterSet[num]) or hasWord(nm, COUNTER_WORDS) then return "counter", id, nm end
+	if not track.Looped and ACTION[track.Priority] then return "damage", id, nm end
+	return nil, id, nm
+end
+
+local function classify(a, track)
+	local plr = ownerOf(a)
+	if not plr or plr == LocalPlayer then return end
+	local myChar, char = LocalPlayer.Character, plr.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not myRoot or not root then return end
+	if (root.Position - myRoot.Position).Magnitude > ALERT_RANGE then return end
+	local t0 = os.clock()
+	while track.Length == 0 and os.clock() - t0 < 0.4 do task.wait() end -- đợi animation load xong
+	local kind, id, nm = moveKind(track)
+	if PRINT_IDS then print("[Cảnh báo]", plr.Name, id, nm, track.Priority.Name, track.Looped) end
+	if kind then alert(plr, kind) end
+end
+
+local function startTrack(a, track)
+	if activeTracks[track] then return end
+	activeTracks[track] = true
+	if opt.anim then pcall(track.AdjustWeight, track, 0, 0) end -- ẩn dáng ngay lập tức
+	if opt.alert then
+		pending[track] = true
+		task.spawn(function()
+			pcall(classify, a, track)
+			pending[track] = nil
+			if opt.anim then pcall(track.Stop, track, 0) end
+		end)
+	end
+end
+
+local function hookAnimator(a)
+	if animators[a] then return end
+	animators[a] = true
+	a.AnimationPlayed:Connect(function(track)
+		if not (opt.anim or opt.alert) then return end
+		startTrack(a, track)
+		if opt.anim and not pending[track] then pcall(track.Stop, track, 0) end
+	end)
+end
+
+local function watchChar(char)
+	if not char or watchedChars[char] then return end
+	local plr = Players:GetPlayerFromCharacter(char)
+	if not plr or plr == LocalPlayer then return end
+	watchedChars[char] = true
+	char.AttributeChanged:Connect(function(name)
+		if opt.alert and hasWord(name, COUNTER_WORDS) then
+			local v = char:GetAttribute(name)
+			if v and v ~= 0 and v ~= "" then alert(plr, "counter") end
+		end
+	end)
+	char.ChildAdded:Connect(function(c)
+		if opt.alert and hasWord(c.Name, COUNTER_WORDS) then alert(plr, "counter") end
+	end)
+end
+
+---------------------------------------------------------------- 1 & 2: Đứng yên / Ẩn người chơi
+local function setFrozen(char, on)
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if root then root.Anchored = on end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local animator = hum and hum:FindFirstChildOfClass("Animator")
+	if animator then
+		for _, track in animator:GetPlayingAnimationTracks() do
+			track:AdjustSpeed(on and 0 or 1)
+		end
+	end
+end
+
+local function setHidden(char, on)
+	local v = on and 1 or 0
+	for _, d in char:GetDescendants() do
+		if d:IsA("BasePart") then
+			if d.LocalTransparencyModifier ~= v then d.LocalTransparencyModifier = v end
+		elseif d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") then
+			if on then
+				if d.Enabled then effectOff[d] = true; d.Enabled = false end
+			elseif effectOff[d] then
+				effectOff[d] = nil
+				d.Enabled = true
+			end
+		end
+	end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		if on then
+			if nameMode[hum] == nil then nameMode[hum] = hum.DisplayDistanceType end
+			hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		elseif nameMode[hum] ~= nil then
+			hum.DisplayDistanceType = nameMode[hum]
+			nameMode[hum] = nil
+		end
+	end
+end
+
+local function refresh()
+	if selected and not selected.Parent then selected = nil end
+	for _, plr in Players:GetPlayers() do
+		local char = plr.Character
+		if plr ~= LocalPlayer and char then
+			local isSel = (plr == selected)
+			local wantFreeze = opt.freeze and not isSel
+			local wantHide = opt.hide and not isSel
+			local st = state[char]
+			if not st then
+				st = {frozen = false, hidden = false}
+				state[char] = st
+			end
+			if wantFreeze or st.frozen then pcall(setFrozen, char, wantFreeze) end
+			if wantHide or st.hidden then pcall(setHidden, char, wantHide) end
+			st.frozen = wantFreeze
+			st.hidden = wantHide
+			if opt.alert then
+				watchChar(char)
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				local an = hum and hum:FindFirstChildOfClass("Animator")
+				if an then hookAnimator(an) end
+			end
+		end
+	end
+	if selected and selected.Character and (opt.freeze or opt.hide) then
+		highlight.Parent = selected.Character
+	else
+		highlight.Parent = nil
+	end
+end
+
+---------------------------------------------------------------- 3, 4, 5, 7: Xoá / ẩn
+local backlog, fresh = {h = 1, t = 0}, {h = 1, t = 0}
+
+local function inCharacter(d)
+	local m = d.Parent
+	while m and m ~= workspace do
+		if m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") then return true end
+		m = m.Parent
+	end
+	return false
+end
+
+local function stripPart(d, cls)
+	d.Material = Enum.Material.SmoothPlastic
+	d.Reflectance = 0
+	d.CastShadow = false
+	d.Color = GRAY
+	if cls == "MeshPart" then
+		d.TextureID = ""
+		d.RenderFidelity = Enum.RenderFidelity.Performance
+	elseif d:IsA("PartOperation") then
+		d.UsePartColor = true
+	end
+end
+
+local function hidePart(d)
+	if d == ground then return end
+	mapHid[d] = true
+	if d.LocalTransparencyModifier ~= 1 then d.LocalTransparencyModifier = 1 end
+end
+
+-- mảnh nhỏ mới sinh ra (đất đá bắn lên, mảnh vỡ, vòng sóng...) thì xoá hẳn
+local function isDebris(d)
+	if d.Transparency >= 0.95 then return false end -- vật vô hình (hitbox...) thì để yên
+	local size = d.Size.Magnitude
+	if not d.CanCollide then return true end
+	if not d.Anchored and size <= 25 then return true end
+	local p = d.Parent
+	while p and p ~= workspace do
+		if hasWord(p.Name, FX_FOLDERS) then return true end
+		p = p.Parent
+	end
+	return size <= 30 and hasWord(d.Name, FX_NAMES)
+end
+
+-- mảnh đất dưới chân luôn được giữ lại, đi tới đâu đổi theo tới đó
+local function updateGround()
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = {char}
+	params.RespectCanCollide = true
+	local r = workspace:Raycast(root.Position, Vector3.new(0, -100, 0), params)
+	local g = r and r.Instance
+	if g and (g.ClassName == "Terrain" or inCharacter(g)) then g = nil end
+	if g == ground then return end
+	local old = ground
+	ground = g
+	if g then
+		mapHid[g] = nil
+		if g.LocalTransparencyModifier ~= 0 then g.LocalTransparencyModifier = 0 end
+	end
+	if old and old.Parent and opt.map then hidePart(old) end
+end
+
+-- part mới xuất hiện giữa trận (chiêu, mảnh vỡ...)
+local function newPart(d)
+	local cls = d.ClassName
+	if cls == "Terrain" then return end
+	local char = inCharacter(d)
+	if opt.details then
+		if not char and isDebris(d) then
+			d:Destroy()
+			return
+		end
+		stripPart(d, cls)
+	end
+	if opt.map and not char then hidePart(d) end
+end
+
+local function process(d)
+	local cls = d.ClassName
+	if cls == "Highlight" and d.Name == HL_NAME then return end
+	if (opt.effects and EFFECT[cls]) or (opt.details and (EMITTER[cls] or DETAIL[cls])) then
+		d:Destroy()
+		return
+	end
+	if d:IsA("BasePart") then
+		if cls == "Terrain" then return end
+		if opt.details then stripPart(d, cls) end
+		if opt.map and not inCharacter(d) then hidePart(d) end
+		return
+	end
+	if opt.details and cls == "SpecialMesh" then
+		d.TextureId = ""
+		return
+	end
+	if opt.map and MAP_OFF[cls] and not inCharacter(d) then
+		if d.Enabled then
+			d.Enabled = false
+			mapOff[d] = true
+		end
+		return
+	end
+	if cls == "Animator" and (opt.anim or opt.alert) then
+		hookAnimator(d)
+		if opt.anim then
+			for _, tr in d:GetPlayingAnimationTracks() do pcall(tr.Stop, tr, 0) end
+		end
+	elseif cls == "Humanoid" and opt.alert then
+		watchChar(d.Parent)
+	elseif cls == "LocalScript" and opt.anim and d.Name == "Animate" and not d.Disabled then
+		d.Disabled = true
+		animScripts[d] = true
+	end
+end
+
+local function handleNew(d)
+	if not d.Parent then return end
+	if d:IsA("BasePart") then newPart(d) else process(d) end
+end
+
+-- xử lý dần từng khung hình để không bị đứng máy
+local function drain(q, handler, budget)
+	local t0, n = os.clock(), 0
+	while q.h <= q.t do
+		local d = q[q.h]
+		q[q.h] = nil
+		q.h += 1
+		if d and d.Parent then pcall(handler, d) end
+		n += 1
+		if n % 32 == 0 and os.clock() - t0 > budget then break end
+	end
+	if q.h > q.t then q.h, q.t = 1, 0 end
+end
+
+RunService.Heartbeat:Connect(function()
+	if fresh.h <= fresh.t then drain(fresh, handleNew, 0.008) end
+	if backlog.h <= backlog.t then drain(backlog, process, 0.003) end
+end)
+
+local function sweepAll()
+	table.clear(backlog)
+	backlog.h = 1
+	local t = 0
+	for _, d in workspace:GetDescendants() do
+		t += 1
+		backlog[t] = d
+	end
+	for _, d in Lighting:GetDescendants() do
+		t += 1
+		backlog[t] = d
+	end
+	backlog.t = t
+end
+
+local function onAdded(d)
+	if opt.effects or opt.details or opt.anim or opt.alert or opt.map then
+		fresh.t += 1
+		fresh[fresh.t] = d
+	end
+end
+workspace.DescendantAdded:Connect(onAdded)
+Lighting.DescendantAdded:Connect(onAdded)
+
+local function stripWorld()
+	set(Lighting, "GlobalShadows", false)
+	set(Lighting, "EnvironmentDiffuseScale", 0)
+	set(Lighting, "EnvironmentSpecularScale", 0)
+	local t = workspace.Terrain
+	set(t, "WaterWaveSize", 0)
+	set(t, "WaterWaveSpeed", 0)
+	set(t, "WaterReflectance", 0)
+	for _, m in Enum.Material:GetEnumItems() do
+		pcall(t.SetMaterialColor, t, m, GRAY)
+	end
+	pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+end
+
+local function showMap() -- tắt mục 7: hiện lại toàn bộ
+	local parts, objs = {}, {}
+	for p in mapHid do parts[#parts + 1] = p end
+	for o in mapOff do objs[#objs + 1] = o end
+	table.clear(mapHid)
+	table.clear(mapOff)
+	ground = nil
+	task.spawn(function()
+		for i, p in parts do
+			if not opt.map and p.Parent then p.LocalTransparencyModifier = 0 end
+			if i % 1500 == 0 then task.wait() end
+		end
+		for _, o in objs do
+			if not opt.map and o.Parent then o.Enabled = true end
+		end
+	end)
+end
+
+local function restoreAnim() -- tắt mục 5
+	for s in animScripts do
+		if s.Parent then s.Disabled = false end
+		animScripts[s] = nil
+	end
+	for a in animators do
+		if a.Parent then
+			pcall(function()
+				for _, tr in a:GetPlayingAnimationTracks() do tr:AdjustWeight(1, 0) end
+			end)
+		end
+	end
+end
+
+local function clearAlerts() -- tắt mục 6
+	for _, hl in alertHL do hl.Parent = nil end
+	for _, t in alertTag do t.Enabled = false end
+end
+
+---------------------------------------------------------------- Bật / tắt từng mục
+function setOption(key, value)
+	opt[key] = value
+	if key == "freeze" and value then selected = nil end -- bật lại thì tất cả đứng yên, kể cả người đã chọn
+	if value then
+		if key == "map" then updateGround() end
+		if key == "details" then stripWorld() end
+		if key == "effects" or key == "details" or key == "anim" or key == "map" then sweepAll() end
+	else
+		if key == "anim" then restoreAnim() end
+		if key == "map" then showMap() end
+		if key == "alert" then clearAlerts() end
+	end
+	updateUI()
+	refresh()
+end
+
+---------------------------------------------------------------- Kéo nút / chạm nút để mở menu
+local dragging, dragInput, dragStart, startCenter, moved = false, nil, nil, nil, false
+
+button.InputBegan:Connect(function(input)
+	local t = input.UserInputType
+	if dragging or (t ~= Enum.UserInputType.MouseButton1 and t ~= Enum.UserInputType.Touch) then return end
+	dragging = true
+	moved = false
+	dragInput = input
+	dragStart = input.Position
+	startCenter = holder.AbsolutePosition + holder.AbsoluteSize / 2
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not dragging then return end
+	if input == dragInput or input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+		if moved or delta.Magnitude > 12 then
+			moved = true
+			local scr, hs = gui.AbsoluteSize, holder.AbsoluteSize
+			local cx = math.clamp(startCenter.X + delta.X, hs.X / 2, scr.X - hs.X / 2)
+			local cy = math.clamp(startCenter.Y + delta.Y, hs.Y / 2, scr.Y - hs.Y / 2)
+			holder.Position = UDim2.fromScale(cx / scr.X, cy / scr.Y)
+		end
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if not dragging then return end
+	local same = input == dragInput
+		or (input.UserInputType == Enum.UserInputType.MouseButton1
+			and dragInput.UserInputType == Enum.UserInputType.MouseButton1)
+	if not same then return end
+	dragging = false
+	if not moved then setPanel(not panel.Visible) end -- chạm là mở/đóng menu luôn
+end)
+
+---------------------------------------------------------------- Chạm vào người chơi để chọn (khi mục 1 đang bật)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed or not opt.freeze then return end
+	local t = input.UserInputType
+	if t ~= Enum.UserInputType.MouseButton1 and t ~= Enum.UserInputType.Touch then return end
+
+	local cam = workspace.CurrentCamera
+	local ray = cam:ScreenPointToRay(input.Position.X, input.Position.Y)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = {LocalPlayer.Character}
+	local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+	if not result then return end
+
+	local inst = result.Instance
+	while inst and inst ~= workspace do
+		local plr = Players:GetPlayerFromCharacter(inst)
+		if plr then
+			if plr ~= LocalPlayer then
+				if selected == plr then selected = nil else selected = plr end
+				refresh()
+			end
+			return
+		end
+		inst = inst.Parent
+	end
+end)
+
+---------------------------------------------------------------- Vòng lặp cập nhật
+local function pollAnimator(a)
+	local owner = ownerOf(a)
+	if not (opt.anim or (owner and owner ~= LocalPlayer)) then return end
+	local cur = {}
+	for _, tr in a:GetPlayingAnimationTracks() do
+		cur[tr] = true
+		startTrack(a, tr)
+		if opt.anim and not pending[tr] then tr:Stop(0) end
+	end
+	local prev = lastPlaying[a]
+	if prev then
+		for tr in prev do
+			if not cur[tr] then activeTracks[tr] = nil end
+		end
+	end
+	lastPlaying[a] = cur
+end
+
+task.spawn(function()
+	while true do
+		if opt.anim or opt.alert then
+			for a in animators do
+				if a.Parent then pcall(pollAnimator, a) end
+			end
+		end
+		if opt.map then pcall(updateGround) end
+		task.wait(0.1)
+	end
+end)
+
+task.spawn(function()
+	while true do
+		pcall(refresh)
+		task.wait(0.5)
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+	local t = alertTag[plr]
+	if t then t:Destroy() end
+end)
+
+updateUI()
