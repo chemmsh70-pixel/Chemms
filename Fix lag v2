@@ -10,7 +10,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 ---------------------------------------------------------------- CÀI ĐẶT (sửa ở đây nếu muốn)
 local SOUND_DAMAGE = "rbxassetid://139726388352120" -- âm khi đối thủ dùng chiêu
 local SOUND_COUNTER = "rbxassetid://9125485591" -- âm khi đối thủ counter
-local SOUND_VOLUME = 5
+local SOUND_VOLUME = 10
 local ALERT_RANGE = 120 -- chỉ cảnh báo đối thủ trong tầm này (studs)
 local ALERT_TIME = 0.8 -- thân đối thủ đỏ/xanh bao lâu (giây)
 local HIT_WAIT = 0.12 -- đợi chút để biết đối thủ có vừa bị trúng đòn không (đòn bạn đánh trúng thì không báo)
