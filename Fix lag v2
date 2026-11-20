@@ -8,9 +8,9 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 ---------------------------------------------------------------- CÀI ĐẶT (sửa ở đây nếu muốn)
-local SOUND_DAMAGE = "rbxassetid://139726388352120" -- âm khi đối thủ dùng chiêu
-local SOUND_COUNTER = "rbxassetid://9125485591" -- âm khi đối thủ counter
-local SOUND_VOLUME = 10
+local SOUND_DAMAGE = "139726388352120" -- âm khi đối thủ dùng chiêu
+local SOUND_COUNTER = "9125485591" -- âm khi đối thủ counter
+local SOUND_VOLUME = 1
 local ALERT_RANGE = 120 -- chỉ cảnh báo đối thủ trong tầm này (studs)
 local ALERT_TIME = 0.8 -- thân đối thủ đỏ/xanh bao lâu (giây)
 local HIT_WAIT = 0.12 -- đợi chút để biết đối thủ có vừa bị trúng đòn không (đòn bạn đánh trúng thì không báo)
@@ -23,12 +23,14 @@ local IGNORE_IDS = {} -- ID animation muốn bỏ qua (ví dụ animation bị �
 local GRAY = Color3.fromRGB(163, 162, 165)
 local ON_COLOR = Color3.fromRGB(46, 160, 90)
 local OFF_COLOR = Color3.fromRGB(90, 90, 105)
+local TARGET_COLOR = Color3.fromRGB(255, 215, 60) -- viền vàng = người được chọn để cảnh báo
 local HL_NAME = "LagMenuHL"
 local COLORS = {damage = Color3.fromRGB(255, 45, 45), counter = Color3.fromRGB(45, 130, 255)}
 
 local opt = {freeze = false, hide = false, effects = false, details = false,
 	anim = false, alert = false, map = false}
-local selected = nil -- người được chạm chọn
+local selected = nil -- người được chạm chọn khi mục 1 bật (không bị đứng yên/ẩn)
+local alertTarget = nil -- người được chọn để cảnh báo chiêu (nil = cảnh báo mọi người)
 local ground = nil -- mảnh đất dưới chân (khi bật mục 7)
 
 local weak = {__mode = "k"}
@@ -40,7 +42,7 @@ local watchedChars, watchedHum, lastHurt = newWeak(), newWeak(), newWeak()
 local alertHL, alertLast, alertUntil = newWeak(), newWeak(), newWeak()
 local lastSound = {}
 -- ghi nhớ để trả lại như cũ khi tắt
-local removed = {} -- (giữ chắc) thứ đã gỡ ra -> parent cũ
+local removed = {} -- thứ đã gỡ ra -> chỗ cũ (giữ chắc để còn trả lại)
 local origPart, origTex, origUnion, origMesh = newWeak(), newWeak(), newWeak(), newWeak()
 local fxOff, mapHid, mapOff = newWeak(), newWeak(), newWeak()
 local uiParts, guiHooked = newWeak(), newWeak()
@@ -274,19 +276,27 @@ local note = Instance.new("TextLabel")
 note.LayoutOrder = 8
 note.Size = UDim2.new(1, 0, 0.07, 0)
 note.BackgroundTransparency = 1
-note.Text = "Tắt mục nào là trả lại như cũ"
 note.TextColor3 = Color3.fromRGB(190, 190, 205)
 note.TextScaled = true
 note.Font = Enum.Font.SourceSans
 note.Parent = panel
 cap(note, 14)
 
+-- viền xanh lá: người được chọn ở mục 1
 local highlight = Instance.new("Highlight")
 highlight.Name = HL_NAME
 highlight.FillColor = Color3.fromRGB(60, 220, 110)
 highlight.FillTransparency = 0.6
 highlight.OutlineColor = Color3.new(1, 1, 1)
 highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+
+-- viền vàng: người được chọn để cảnh báo chiêu (hiện khi mục 6 đang tắt)
+local targetHL = Instance.new("Highlight")
+targetHL.Name = HL_NAME
+targetHL.FillColor = TARGET_COLOR
+targetHL.FillTransparency = 0.75
+targetHL.OutlineColor = TARGET_COLOR
+targetHL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 
 local function updateUI()
 	local n = 0
@@ -299,6 +309,13 @@ local function updateUI()
 	button.Text = "MENU\n" .. n .. "/" .. #ROWS
 	button.BackgroundColor3 = n > 0 and ON_COLOR or Color3.fromRGB(55, 55, 70)
 	stroke.Color = n > 0 and Color3.fromRGB(150, 255, 190) or Color3.new(1, 1, 1)
+	if alertTarget then
+		note.Text = "Cảnh báo chỉ: " .. alertTarget.DisplayName
+	elseif opt.alert then
+		note.Text = "Cảnh báo tất cả mọi người"
+	else
+		note.Text = "Chạm vào 1 người để chọn cảnh báo"
+	end
 end
 
 ---------------------------------------------------------------- 6: Cảnh báo chiêu (thân đối thủ đỏ = chiêu, xanh = counter)
@@ -321,6 +338,8 @@ local sndDamage = makeSound(SOUND_DAMAGE, 0.7)
 local sndCounter = makeSound(SOUND_COUNTER, 1.8)
 
 local function alert(plr, kind)
+	if not opt.alert then return end
+	if alertTarget and plr ~= alertTarget then return end
 	local char = plr.Character
 	if not char then return end
 	local now = os.clock()
@@ -374,6 +393,7 @@ end
 local function classify(a, track)
 	local plr = ownerOf(a)
 	if not plr or plr == LocalPlayer then return end
+	if alertTarget and plr ~= alertTarget then return end
 	local myChar, char = LocalPlayer.Character, plr.Character
 	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
 	local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -397,12 +417,15 @@ local function startTrack(a, track)
 	activeTracks[track] = true
 	if opt.anim then pcall(track.AdjustWeight, track, 0, 0) end -- ẩn dáng ngay lập tức
 	if opt.alert then
-		pending[track] = true
-		task.spawn(function()
-			pcall(classify, a, track)
-			pending[track] = nil
-			if opt.anim then pcall(track.Stop, track, 0) end
-		end)
+		local plr = ownerOf(a)
+		if plr and plr ~= LocalPlayer and (not alertTarget or plr == alertTarget) then
+			pending[track] = true
+			task.spawn(function()
+				pcall(classify, a, track)
+				pending[track] = nil
+				if opt.anim then pcall(track.Stop, track, 0) end
+			end)
+		end
 	end
 end
 
@@ -420,6 +443,7 @@ local function watchChar(char)
 	if not char then return end
 	local plr = Players:GetPlayerFromCharacter(char)
 	if not plr or plr == LocalPlayer then return end
+	if alertTarget and plr ~= alertTarget then return end
 
 	-- theo dõi máu: mất máu = vừa bị trúng đòn
 	local hum = char:FindFirstChildOfClass("Humanoid")
@@ -498,6 +522,10 @@ end
 
 local function refresh()
 	if selected and not selected.Parent then selected = nil end
+	if alertTarget and not alertTarget.Parent then
+		alertTarget = nil -- người được chọn đã thoát game
+		updateUI()
+	end
 	for _, plr in Players:GetPlayers() do
 		local char = plr.Character
 		if plr ~= LocalPlayer and char then
@@ -513,7 +541,7 @@ local function refresh()
 			if wantHide or st.hidden then pcall(setHidden, char, wantHide) end
 			st.frozen = wantFreeze
 			st.hidden = wantHide
-			if opt.alert then
+			if opt.alert and (not alertTarget or plr == alertTarget) then
 				watchChar(char)
 				local hum = char:FindFirstChildOfClass("Humanoid")
 				local an = hum and hum:FindFirstChildOfClass("Animator")
@@ -521,10 +549,13 @@ local function refresh()
 			end
 		end
 	end
-	if selected and selected.Character and (opt.freeze or opt.hide) then
-		highlight.Parent = selected.Character
+	local greenOn = selected and selected.Character and (opt.freeze or opt.hide)
+	highlight.Parent = greenOn and selected.Character or nil
+	local tchar = alertTarget and not opt.alert and alertTarget.Character
+	if tchar and not (greenOn and alertTarget == selected) then
+		targetHL.Parent = tchar
 	else
-		highlight.Parent = nil
+		targetHL.Parent = nil
 	end
 end
 
@@ -571,12 +602,16 @@ local function wantRemove(cls)
 	return (opt.effects and EMITTER[cls]) or (opt.details and (EMITTER[cls] or DETAIL[cls]))
 end
 
--- gỡ ra khỏi game nhưng nhớ chỗ cũ để trả lại
-local function removeInst(d)
-	local p = d.Parent
-	if p then
-		removed[d] = p
-		d.Parent = nil
+-- gỡ ra khỏi game: keep = true thì nhớ chỗ cũ để trả lại khi tắt, không thì xoá hẳn
+local function removeInst(d, keep)
+	if keep then
+		local p = d.Parent
+		if p then
+			removed[d] = p
+			d.Parent = nil
+		end
+	else
+		d:Destroy()
 	end
 end
 
@@ -612,7 +647,7 @@ local function showPart(d)
 	if d.LocalTransparencyModifier ~= 0 then d.LocalTransparencyModifier = 0 end
 end
 
--- mảnh nhỏ mới sinh ra (đất đá bắn lên, mảnh vỡ...) thì gỡ luôn
+-- mảnh nhỏ mới sinh ra (đất đá bắn lên, mảnh vỡ...) thì xoá luôn
 local function isDebris(d)
 	if d.Transparency >= 0.95 then return false end -- vật vô hình (hitbox...) thì để yên
 	local size = d.Size.Magnitude
@@ -653,7 +688,8 @@ local function process(d, isNew)
 	if wantRemove(cls) then
 		local p = d.Parent
 		if not (DETAIL[cls] and p and p:IsA("BasePart") and isUIPart(p)) then
-			removeInst(d)
+			-- đồ có sẵn (hoặc đồ của nhân vật) thì nhớ để trả lại, đồ sinh ra giữa trận thì xoá hẳn
+			removeInst(d, (not isNew) or (DETAIL[cls] and inCharacter(d)))
 			return
 		end
 	end
@@ -672,7 +708,7 @@ local function process(d, isNew)
 			if isNew then
 				char = inCharacter(d)
 				if not char and isDebris(d) then
-					removeInst(d)
+					removeInst(d, false)
 					return
 				end
 			end
@@ -748,7 +784,7 @@ local function restoreInst(d)
 		end
 	end
 	-- mục khác còn bật thì cho nó xử lý lại
-	if changed and (opt.effects or opt.details or opt.map) then push(fresh, d) end
+	if changed and (opt.effects or opt.details or opt.map) then push(backlog, d) end
 end
 
 local function handleNew(d)
@@ -941,38 +977,66 @@ UserInputService.InputEnded:Connect(function(input)
 	if not moved then setPanel(not panel.Visible) end -- chạm là mở/đóng menu luôn
 end)
 
----------------------------------------------------------------- Chạm vào người chơi để chọn (khi mục 1 đang bật)
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed or not opt.freeze then return end
-	local t = input.UserInputType
-	if t ~= Enum.UserInputType.MouseButton1 and t ~= Enum.UserInputType.Touch then return end
-
+---------------------------------------------------------------- Chạm vào người chơi để chọn
+-- tìm người chơi dưới ngón tay, bỏ qua vật vô hình hoặc đã bị ẩn
+local function pickPlayer(x, y)
 	local cam = workspace.CurrentCamera
-	local ray = cam:ScreenPointToRay(input.Position.X, input.Position.Y)
+	local ray = cam:ScreenPointToRay(x, y)
+	local skip = {LocalPlayer.Character}
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = {LocalPlayer.Character}
-	local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
-	if not result then return end
-
-	local inst = result.Instance
-	while inst and inst ~= workspace do
-		local plr = Players:GetPlayerFromCharacter(inst)
-		if plr then
-			if plr ~= LocalPlayer then
-				if selected == plr then selected = nil else selected = plr end
-				refresh()
+	for _ = 1, 10 do
+		params.FilterDescendantsInstances = skip
+		local r = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+		if not r then return nil end
+		local inst = r.Instance
+		local tr = get(inst, "Transparency") or 0
+		local lm = get(inst, "LocalTransparencyModifier") or 0
+		if tr >= 0.95 or lm >= 0.95 then
+			skip[#skip + 1] = inst
+		else
+			local m = inst
+			while m and m ~= workspace do
+				local plr = Players:GetPlayerFromCharacter(m)
+				if plr then return plr end
+				m = m.Parent
 			end
-			return
+			return nil
 		end
-		inst = inst.Parent
 	end
+	return nil
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	local t = input.UserInputType
+	if t ~= Enum.UserInputType.MouseButton1 and t ~= Enum.UserInputType.Touch then return end
+	-- mục 1 bật: chọn người không bị đứng yên/ẩn
+	local pickFreeze = opt.freeze
+	-- mục 6 tắt (và đang mở menu hoặc mục 1 bật): chọn người để cảnh báo riêng
+	local pickAlert = (not opt.alert) and (opt.freeze or panel.Visible)
+	if not (pickFreeze or pickAlert) then return end
+
+	local plr = pickPlayer(input.Position.X, input.Position.Y)
+	if not plr or plr == LocalPlayer then return end
+
+	local already = (pickFreeze and selected == plr) or (pickAlert and alertTarget == plr)
+	if already then -- chạm lần nữa để bỏ chọn
+		if pickFreeze and selected == plr then selected = nil end
+		if pickAlert and alertTarget == plr then alertTarget = nil end
+	else
+		if pickFreeze then selected = plr end
+		if pickAlert then alertTarget = plr end
+	end
+	updateUI()
+	refresh()
 end)
 
 ---------------------------------------------------------------- Vòng lặp cập nhật
 local function pollAnimator(a)
 	local owner = ownerOf(a)
-	if not (opt.anim or (owner and owner ~= LocalPlayer)) then return end
+	local watch = opt.alert and owner and owner ~= LocalPlayer and (not alertTarget or owner == alertTarget)
+	if not (opt.anim or watch) then return end
 	local cur = {}
 	for _, tr in a:GetPlayingAnimationTracks() do
 		cur[tr] = true
